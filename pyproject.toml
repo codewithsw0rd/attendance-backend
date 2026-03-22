@@ -1,0 +1,15 @@
+[project]
+name = "attendance-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "django-cors-headers>=4.9.0",
+    "django-environ>=0.13.0",
+    "django-phonenumber-field>=8.4.0",
+    "djangorestframework>=3.16.1",
+    "djangorestframework-simplejwt>=5.5.1",
+    "drf-spectacular>=0.29.0",
+    "psycopg[binary]>=3.3.3",
+]
