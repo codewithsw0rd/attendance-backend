@@ -1,7 +1,7 @@
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models, transaction
 from core.utils.base_model import BaseModel
-
+import uuid
 # Create your models here.
 
 class CustomUserManager(BaseUserManager):
@@ -44,6 +44,7 @@ class UserType(models.TextChoices):
     TEACHER = 'TEACHER', 'Teacher',
     
 class CustomUser(AbstractUser):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     user_type = models.CharField(max_length=20, choices=UserType.choices, default=UserType.STUDENT)
     
