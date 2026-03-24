@@ -120,13 +120,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
         
         return user, access_token, refresh_token
         
-class ProfileSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(source='user.email', read_only=True)
-    is_active = serializers.BooleanField(source='user.is_active', read_only=True)
+# class ProfileSerializer(serializers.ModelSerializer):
+#     email = serializers.EmailField(source='user.email', read_only=True)
+#     is_active = serializers.BooleanField(source='user.is_active', read_only=True)
     
-    class Meta:
-        model = Profile
-        fields = '__all__' 
+#     class Meta:
+#         model = Profile
+#         fields = '__all__' 
     
 class StudentProfileSerializer(serializers.ModelSerializer):
     class Meta:

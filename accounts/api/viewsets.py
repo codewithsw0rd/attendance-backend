@@ -33,7 +33,7 @@ class StudentViewSet(ModelViewSet):
         user_obj, access_token, refresh_token = user_serializer.save()
         
         return Response(
-            ProfileSerializer(user_obj.profile).data,
+            StudentProfileReadSerializer(user_obj.studentprofile).data,
             status=status.HTTP_201_CREATED
         )
         
@@ -64,7 +64,7 @@ class TeacherViewSet(ModelViewSet):
         user_obj, access_token, refresh_token = user_serializer.save()
         
         return Response(
-            ProfileSerializer(user_obj.profile).data,
+            TeacherProfileReadSerializer(user_obj.teacherprofile).data,
             status=status.HTTP_201_CREATED
         )
         
@@ -100,7 +100,7 @@ class AdminViewSet(ModelViewSet):
         user_obj, _, _ = user_serializer.save()
         
         return Response(
-            ProfileSerializer(user_obj.profile).data,
+            AdminProfileReadSerializer(user_obj.adminprofile).data,
             status=status.HTTP_201_CREATED
         )
         

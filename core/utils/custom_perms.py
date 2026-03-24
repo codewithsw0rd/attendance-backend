@@ -6,5 +6,5 @@ class IsClientUser(BasePermission):
         return bool(
             request.user and
             request.user.is_authenticated and
-            request.user.user_type == UserType.CLIENT
+            request.user.user_type == UserType.ADMIN
         )
