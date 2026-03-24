@@ -58,7 +58,6 @@ class CustomUser(AbstractUser):
         return self.email
     
 class Profile(BaseModel):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     first_name = models.CharField(max_length=150, null=True, blank=True)
     last_name = models.CharField(max_length=150, null=True, blank=True)
     phone_no = models.CharField(max_length=20, null=True, blank=True)
@@ -66,13 +65,15 @@ class Profile(BaseModel):
     address = models.TextField(null=True, blank=True)
     
 class StudentProfile(Profile):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='studentprofile')
     roll_number = models.CharField(max_length=20, unique=True)
     department = models.CharField(max_length=100, null=True, blank=True)
     year = models.IntegerField()
     
 class TeacherProfile(Profile):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='teacherprofile')
     employee_id = models.CharField(max_length=20, unique=True)
     department = models.CharField(max_length=100, null=True, blank=True)
     
 class AdminProfile(Profile):
-    pass
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='adminprofile')

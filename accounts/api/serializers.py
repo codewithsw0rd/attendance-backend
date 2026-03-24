@@ -142,3 +142,32 @@ class AdminProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdminProfile
         fields = '__all__'
+        
+class StudentProfileReadSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source='user.email', read_only=True)
+    is_active = serializers.BooleanField(source='user.is_active', read_only=True)
+    user_type = serializers.CharField(source='user.user_type', read_only=True)
+    
+    
+    class Meta:
+        model = StudentProfile
+        fields = '__all__'
+        
+class TeacherProfileReadSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source='user.email', read_only=True)
+    is_active = serializers.BooleanField(source='user.is_active', read_only=True)
+    user_type = serializers.CharField(source='user.user_type', read_only=True)
+    
+    
+    class Meta:
+        model = TeacherProfile
+        fields = '__all__'
+        
+class AdminProfileReadSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source='user.email', read_only=True)
+    is_active = serializers.BooleanField(source='user.is_active', read_only=True)
+    user_type = serializers.CharField(source='user.user_type', read_only=True)
+    
+    class Meta:
+        model = AdminProfile
+        fields = '__all__'

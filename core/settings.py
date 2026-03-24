@@ -100,11 +100,22 @@ WSGI_APPLICATION = 'core.wsgi.application'
 #         'PORT':'5432'
 #     }
 # }
-
-DATABASES = {
-    'default': dj_database_url.config(
-        default=env('DATABASE_URL')
-    )
+if env('DATABASE_URL', default=None):
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=env('DATABASE_URL')
+        )
+    }
+else:
+    DATABASES = {
+    'default':{
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME':env('DB_NAME'),
+        'USER':env('DB_USER'),
+        'PASSWORD':env('DB_PASSWORD'),
+        'HOST':env('DB_HOST'),
+        'PORT':'5432'
+    }
 }
 
 # Password validation

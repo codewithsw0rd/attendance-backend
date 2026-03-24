@@ -3,10 +3,12 @@ from django.urls import path, include
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from .routers import router
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from accounts.api.api_view import GetProfileView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/', include(router.urls))
+    path('api/', include(router.urls)),
+    path('api/profile/', GetProfileView.as_view(), name='get_profile'),
 ]
 
 # auth urls
