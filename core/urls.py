@@ -4,6 +4,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 from .routers import router
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from accounts.api.api_view import GetProfileView
+from core.utils.custom_tokens import CustomTokenObtainPairView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -13,7 +14,7 @@ urlpatterns = [
 
 # auth urls
 urlpatterns += [
-    path('api/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 ]
 
