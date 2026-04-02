@@ -52,7 +52,8 @@ INSTALLED_APPS = [
     'drf_spectacular',
     
     'accounts',
-    'academics'
+    'academics',
+    'attendance'
 ]
 
 MIDDLEWARE = [
@@ -183,7 +184,7 @@ SPECTACULAR_SETTINGS = {
     ],
 }
 
-SIMPLET_JWT = {
+SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ALGORITHM': 'HS256',
@@ -194,3 +195,6 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+
+# ML Service Configuration
+ML_SERVICE_URL = env('ML_SERVICE_URL', default='http://localhost:8000')

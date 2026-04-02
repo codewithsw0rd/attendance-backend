@@ -1,6 +1,7 @@
 from rest_framework.routers import DefaultRouter
 from accounts.api.viewsets import *
 from academics.api.viewsets import *
+from attendance.api.viewsets import *
 
 router = DefaultRouter()
 
@@ -13,3 +14,8 @@ router.register('admins', AdminViewSet, basename='admins')
 router.register('subjects', SubjectViewSet, basename='subjects')
 router.register('enrollments', EnrollmentViewSet, basename='enrollments')
 router.register('class-sessions', ClassSessionViewSet, basename='class-sessions')
+
+#-----------------------------------FACE RECOGNITION & ATTENDANCE-----------------------------------------------------
+router.register('face-data', FaceDataViewSet, basename='face-data')
+router.register('attendance', AttendanceViewSet, basename='attendance')
+router.register('attendance-logs', AttendanceLogViewSet, basename='attendance-logs')
