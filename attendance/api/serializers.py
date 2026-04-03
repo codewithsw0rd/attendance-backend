@@ -4,7 +4,7 @@ from ..models import FaceData, Attendance, AttendanceLog, FaceEmbedding
 class FaceEmbeddingSerializer(serializers.ModelSerializer):
     class Meta:
         model = FaceEmbedding
-        fields = ['id', 'photo_number', 'quality_score', 'created_at']
+        fields = ['id', 'photo_number', 'embedding', 'quality_score', 'created_at']
         read_only_fields = ['id', 'embedding', 'created_at']
 
 class FaceDataSerializer(serializers.ModelSerializer):
@@ -14,7 +14,7 @@ class FaceDataSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FaceData
-        fields = ['id', 'student', 'student_email', 'student_roll_number', 'is_enrolled', 'created_at', 'updated_at']
+        fields = ['id', 'student', 'student_email', 'student_roll_number', 'is_enrolled', 'embeddings', 'created_at', 'updated_at']
         read_only_fields = ['id', 'embeddings', 'image_path', 'created_at', 'updated_at']
 
 
