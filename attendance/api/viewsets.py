@@ -7,12 +7,14 @@ from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
 from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog
 from .serializers import (
-    FaceDataSerializer, AttendanceSerializer, AttendanceReadSerializer, AttendanceLogSerializer
+    FaceDataSerializer, AttendanceSerializer, AttendanceReadSerializer, AttendanceLogSerializer,
+    AttendanceMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer
 )
 from core.utils.custom_perms import IsClientUser
 from ..ml_client import process_attendance, MLServiceError
 from django.utils import timezone
 import json
+from drf_spectacular.utils import extend_schema
 
 
 class FaceDataViewSet(viewsets.ModelViewSet):
@@ -70,6 +72,11 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             return AttendanceReadSerializer
         return AttendanceSerializer
     
+    @extend_schema(
+        request=AttendanceMarkRequestSerializer,
+        responses={201: AttendanceMarkResponseSerializer, 200: AttendanceMarkResponseSerializer},
+        description="Mark attendance using face recognition.\n\nProcess:\n1. Validates student has registered face\n2. Gets all enrolled students' embeddings\n3. Calls ML service to match face\n4. Creates Attendance record\n5. Creates AttendanceLog with verification metadata"
+    )
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated], parser_classes=[MultiPartParser, FormParser])
     def mark(self, request):
         """
@@ -252,6 +259,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
         )
     
+    @extend_schema(
+        responses={200: AttendanceReadSerializer(many=True)},
+        description="Get current student's attendance history. Only accessible to students."
+    )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def my_attendance(self, request):
         """Get current student's attendance history"""

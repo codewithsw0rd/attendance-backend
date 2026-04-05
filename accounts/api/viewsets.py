@@ -7,6 +7,7 @@ from django.db import transaction
 from core.utils.custom_perms import IsClientUser
 from attendance.models import FaceData, FaceEmbedding
 from attendance.ml_client import register_face_embedding, MLServiceError
+from drf_spectacular.utils import extend_schema
 
 
 class StudentViewSet(ModelViewSet):
@@ -15,6 +16,11 @@ class StudentViewSet(ModelViewSet):
     permission_classes = [IsClientUser]
     parser_classes = (MultiPartParser, FormParser)
     
+    @extend_schema(
+        request=StudentCreationRequestSerializer,
+        responses={201: StudentCreationResponseSerializer},
+        description="Create a new student and register their face photos in a single request.\n\nRequest must be multipart/form-data with email, first_name, last_name, roll_number, and images (1-5 face photos)."
+    )
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         """
@@ -141,6 +147,11 @@ class TeacherViewSet(ModelViewSet):
     permission_classes = [IsClientUser]
     parser_classes = (MultiPartParser, FormParser)
     
+    @extend_schema(
+        request=TeacherCreationRequestSerializer,
+        responses={201: TeacherCreationResponseSerializer},
+        description="Create a new teacher account.\n\nRequest fields: email, password, first_name, last_name, employee_id, and optional department, phone_no, address"
+    )
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         request_data = request.data.copy()
@@ -172,6 +183,11 @@ class AdminViewSet(ModelViewSet):
     serializer_class = AdminProfileSerializer
     parser_classes = (MultiPartParser, FormParser)
     
+    @extend_schema(
+        request=AdminCreationRequestSerializer,
+        responses={201: AdminCreationResponseSerializer},
+        description="Create a new admin account. Maximum 3 admin users allowed.\n\nRequest fields: email, password, first_name, last_name, and optional phone_no, address"
+    )
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         request_data = request.data.copy()

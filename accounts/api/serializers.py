@@ -171,3 +171,106 @@ class AdminProfileReadSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdminProfile
         fields = '__all__'
+
+
+# Request/Response Serializers for Schema Documentation
+
+class StudentCreationRequestSerializer(serializers.Serializer):
+    """Request schema for student creation with face registration"""
+    email = serializers.EmailField(required=True, help_text="Student email address")
+    password = serializers.CharField(
+        write_only=True, 
+        required=True,
+        help_text="Password must be at least 8 characters with uppercase, lowercase, digit, and special character (@$!%*?&)"
+    )
+    first_name = serializers.CharField(max_length=150, required=True, help_text="Student first name")
+    last_name = serializers.CharField(max_length=150, required=True, help_text="Student last name")
+    roll_number = serializers.CharField(max_length=20, required=True, help_text="Student roll number")
+    year = serializers.IntegerField(required=False, allow_null=True, help_text="Year of study")
+    department = serializers.CharField(max_length=100, required=False, allow_null=True, help_text="Department name")
+    phone_no = serializers.CharField(max_length=20, required=False, allow_null=True, help_text="Phone number")
+    address = serializers.CharField(required=False, allow_null=True, help_text="Address")
+    images = serializers.ListField(
+        child=serializers.FileField(),
+        help_text="List of face photos (1-5 images). Send as multipart form-data with field name 'images'"
+    )
+
+
+class FaceEnrollmentStatusSerializer(serializers.Serializer):
+    """Face enrollment status in response"""
+    total_photos_registered = serializers.IntegerField()
+    registration_confidence = serializers.FloatField()
+    is_enrolled = serializers.BooleanField()
+    message = serializers.CharField()
+
+
+class StudentCreationResponseSerializer(serializers.Serializer):
+    """Response schema for student creation"""
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    roll_number = serializers.CharField()
+    year = serializers.IntegerField(allow_null=True)
+    department = serializers.CharField(allow_null=True)
+    phone_no = serializers.CharField(allow_null=True)
+    address = serializers.CharField(allow_null=True)
+    is_active = serializers.BooleanField()
+    user_type = serializers.CharField()
+    face_enrollment = FaceEnrollmentStatusSerializer()
+    access_token = serializers.CharField(help_text="JWT access token")
+    refresh_token = serializers.CharField(help_text="JWT refresh token")
+
+
+class TeacherCreationRequestSerializer(serializers.Serializer):
+    """Request schema for teacher creation"""
+    email = serializers.EmailField(required=True, help_text="Teacher email address")
+    password = serializers.CharField(
+        write_only=True, required=True,
+        help_text="Password must be at least 8 characters with uppercase, lowercase, digit, and special character"
+    )
+    first_name = serializers.CharField(max_length=150, required=True, help_text="Teacher first name")
+    last_name = serializers.CharField(max_length=150, required=True, help_text="Teacher last name")
+    employee_id = serializers.CharField(max_length=20, required=True, help_text="Employee ID")
+    department = serializers.CharField(max_length=100, required=False, allow_null=True, help_text="Department")
+    phone_no = serializers.CharField(max_length=20, required=False, allow_null=True, help_text="Phone number")
+    address = serializers.CharField(required=False, allow_null=True, help_text="Address")
+
+
+class TeacherCreationResponseSerializer(serializers.Serializer):
+    """Response schema for teacher creation"""
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    employee_id = serializers.CharField()
+    department = serializers.CharField(allow_null=True)
+    phone_no = serializers.CharField(allow_null=True)
+    address = serializers.CharField(allow_null=True)
+    is_active = serializers.BooleanField()
+    user_type = serializers.CharField()
+
+
+class AdminCreationRequestSerializer(serializers.Serializer):
+    """Request schema for admin creation"""
+    email = serializers.EmailField(required=True, help_text="Admin email address")
+    password = serializers.CharField(
+        write_only=True, required=True,
+        help_text="Password must be at least 8 characters with uppercase, lowercase, digit, and special character"
+    )
+    first_name = serializers.CharField(max_length=150, required=True, help_text="Admin first name")
+    last_name = serializers.CharField(max_length=150, required=True, help_text="Admin last name")
+    phone_no = serializers.CharField(max_length=20, required=False, allow_null=True, help_text="Phone number")
+    address = serializers.CharField(required=False, allow_null=True, help_text="Address")
+
+
+class AdminCreationResponseSerializer(serializers.Serializer):
+    """Response schema for admin creation"""
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    phone_no = serializers.CharField(allow_null=True)
+    address = serializers.CharField(allow_null=True)
+    is_active = serializers.BooleanField()
+    user_type = serializers.CharField()
