@@ -26,6 +26,10 @@ class FaceDataViewSet(viewsets.ModelViewSet):
     serializer_class = FaceDataSerializer
     permission_classes = [IsClientUser]
     
+    @extend_schema(
+        responses={200: FaceDataSerializer},
+        description="Get current user's face enrollment status including registered photos count, registration confidence, and enrollment completion status."
+    )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def my_enrollment_status(self, request):
         """Get current user's face enrollment status"""
@@ -261,7 +265,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     
     @extend_schema(
         responses={200: AttendanceReadSerializer(many=True)},
-        description="Get current student's attendance history. Only accessible to students."
+        description="Get current student's attendance history. Only accessible to students. Returns list of attendance records with student, class session, and verification details."
     )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def my_attendance(self, request):
@@ -279,6 +283,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         serializer = AttendanceReadSerializer(attendances, many=True)
         return Response(serializer.data)
     
+    @extend_schema(
+        responses={200: AttendanceReadSerializer(many=True)},
+        description="Get attendance records for a specific class session. Teacher only. Requires 'session_id' query parameter."
+    )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def class_attendance(self, request):
         """Get attendance for a specific class session (teacher only)"""
@@ -312,6 +320,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
     
+    @extend_schema(
+        responses={200: SessionSummarySerializer},
+        description="Get attendance summary for a class session including total students, present/absent counts, and attendance rate. Teacher only. Requires 'session_id' query parameter."
+    )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def session_summary(self, request):
         """Get attendance summary for a class session (teacher only)"""
@@ -382,191 +394,10 @@ class AttendanceLogViewSet(viewsets.ReadOnlyModelViewSet):
             )
         return AttendanceLog.objects.none()
     
-    @action(detail=False, methods=['get'])
-    def suspicious_activity(self, request):
-        """Get all suspicious attendance logs (admin only)"""
-        if request.user.user_type != UserType.ADMIN:
-            return Response(
-                {'detail': 'Only admins can view suspicious activity'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        logs = AttendanceLog.objects.filter(is_suspicious=True).order_by('-created_at')
-        serializer = self.get_serializer(logs, many=True)
-        return Response(serializer.data)
-
-
-class FaceDataViewSet(viewsets.ModelViewSet):
-    """
-    Manage student face enrollment data.
-    Only returns enrollment status (actual embeddings are never exposed via API).
-    """
-    queryset = FaceData.objects.all()
-    serializer_class = FaceDataSerializer
-    permission_classes = [IsClientUser]
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def my_enrollment_status(self, request):
-        """Get current user's face enrollment status"""
-        try:
-            face_data = FaceData.objects.get(student__user=request.user)
-            serializer = self.get_serializer(face_data)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except FaceData.DoesNotExist:
-            return Response(
-                {'detail': 'Face data not found for this user'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-
-class AttendanceViewSet(viewsets.ModelViewSet):
-    """
-    Handle attendance records. Supports:
-    - Viewing attendance history
-    - Filtering by student, class session, date range
-    - Admin viewing all attendance
-    - Students viewing their own attendance
-    """
-    permission_classes = [IsAuthenticated]
-    
-    def get_queryset(self):
-        """Filter attendance based on user role"""
-        user = self.request.user
-        if user.user_type == UserType.ADMIN:
-            return Attendance.objects.all()
-        elif user.user_type == UserType.STUDENT:
-            return Attendance.objects.filter(student__user=user)
-        elif user.user_type == UserType.TEACHER:
-            # Teachers can see attendance for their subjects
-            return Attendance.objects.filter(
-                class_session__subject__teacher__user=user
-            )
-        return Attendance.objects.none()
-    
-    def get_serializer_class(self):
-        if self.action == 'list' or self.action == 'retrieve':
-            return AttendanceReadSerializer
-        return AttendanceSerializer
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def my_attendance(self, request):
-        """Get current student's attendance history"""
-        if request.user.user_type != UserType.STUDENT:
-            return Response(
-                {'detail': 'Only students can access their attendance'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        attendances = Attendance.objects.filter(
-            student__user=request.user
-        ).order_by('-marked_at')
-        
-        serializer = AttendanceReadSerializer(attendances, many=True)
-        return Response(serializer.data)
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def class_attendance(self, request):
-        """Get attendance for a specific class session (teacher only)"""
-        if request.user.user_type != UserType.TEACHER:
-            return Response(
-                {'detail': 'Only teachers can access class attendance'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        session_id = request.query_params.get('session_id')
-        if not session_id:
-            return Response(
-                {'detail': 'session_id query parameter required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            session = ClassSession.objects.get(
-                id=session_id,
-                subject__teacher__user=request.user
-            )
-            attendances = Attendance.objects.filter(
-                class_session=session
-            ).order_by('student__roll_number')
-            
-            serializer = AttendanceReadSerializer(attendances, many=True)
-            return Response(serializer.data)
-        except ClassSession.DoesNotExist:
-            return Response(
-                {'detail': 'Class session not found or access denied'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def session_summary(self, request):
-        """Get attendance summary for a class session (teacher only)"""
-        if request.user.user_type != UserType.TEACHER:
-            return Response(
-                {'detail': 'Only teachers can access class attendance'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        session_id = request.query_params.get('session_id')
-        if not session_id:
-            return Response(
-                {'detail': 'session_id query parameter required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            session = ClassSession.objects.get(
-                id=session_id,
-                subject__teacher__user=request.user
-            )
-            
-            total_students = Enrollment.objects.filter(
-                subject=session.subject
-            ).count()
-            
-            present_count = Attendance.objects.filter(
-                class_session=session,
-                status='PRESENT'
-            ).count()
-            
-            absent_count = Attendance.objects.filter(
-                class_session=session,
-                status='ABSENT'
-            ).count()
-            
-            return Response({
-                'session_id': str(session.id),
-                'class_name': session.class_name,
-                'date': session.date,
-                'total_students': total_students,
-                'present': present_count,
-                'absent': absent_count,
-                'attendance_rate': (present_count / total_students * 100) if total_students > 0 else 0
-            })
-        except ClassSession.DoesNotExist:
-            return Response(
-                {'detail': 'Class session not found or access denied'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-
-class AttendanceLogViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Verification logs for attendance. Read-only for auditing purposes.
-    Admins can view all logs, teachers can view logs for their class sessions.
-    """
-    serializer_class = AttendanceLogSerializer
-    permission_classes = [IsAuthenticated]
-    
-    def get_queryset(self):
-        user = self.request.user
-        if user.user_type == UserType.ADMIN:
-            return AttendanceLog.objects.all()
-        elif user.user_type == UserType.TEACHER:
-            return AttendanceLog.objects.filter(
-                attendance__class_session__subject__teacher__user=user
-            )
-        return AttendanceLog.objects.none()
-    
+    @extend_schema(
+        responses={200: AttendanceLogSerializer(many=True)},
+        description="Get all suspicious attendance records (admin only). Identifies attendance patterns flagged as suspicious based on face confidence, distance, and other metrics."
+    )
     @action(detail=False, methods=['get'])
     def suspicious_activity(self, request):
         """Get all suspicious attendance logs (admin only)"""

@@ -238,15 +238,18 @@ class TeacherCreationRequestSerializer(serializers.Serializer):
 
 
 class TeacherCreationResponseSerializer(serializers.Serializer):
-    """Response schema for teacher creation"""
+    """Response schema for teacher creation - matches TeacherProfileReadSerializer output"""
     id = serializers.UUIDField()
-    email = serializers.EmailField()
-    first_name = serializers.CharField()
-    last_name = serializers.CharField()
+    user = serializers.UUIDField(help_text="User ID")
+    first_name = serializers.CharField(allow_null=True)
+    last_name = serializers.CharField(allow_null=True)
     employee_id = serializers.CharField()
     department = serializers.CharField(allow_null=True)
     phone_no = serializers.CharField(allow_null=True)
     address = serializers.CharField(allow_null=True)
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+    email = serializers.EmailField()
     is_active = serializers.BooleanField()
     user_type = serializers.CharField()
 
@@ -265,12 +268,15 @@ class AdminCreationRequestSerializer(serializers.Serializer):
 
 
 class AdminCreationResponseSerializer(serializers.Serializer):
-    """Response schema for admin creation"""
+    """Response schema for admin creation - matches AdminProfileReadSerializer output"""
     id = serializers.UUIDField()
-    email = serializers.EmailField()
-    first_name = serializers.CharField()
-    last_name = serializers.CharField()
+    user = serializers.UUIDField(help_text="User ID")
+    first_name = serializers.CharField(allow_null=True)
+    last_name = serializers.CharField(allow_null=True)
     phone_no = serializers.CharField(allow_null=True)
     address = serializers.CharField(allow_null=True)
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+    email = serializers.EmailField()
     is_active = serializers.BooleanField()
     user_type = serializers.CharField()
