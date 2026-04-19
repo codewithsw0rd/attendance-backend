@@ -5,6 +5,8 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db import transaction
 from core.utils.custom_perms import IsClientUser
+from core.utils.sort import apply_sorting
+from ..filters import StudentProfileFilter, TeacherProfileFilter, AdminProfileFilter
 from attendance.models import FaceData, FaceEmbedding
 from attendance.ml_client import register_face_embedding, MLServiceError
 from drf_spectacular.utils import extend_schema
@@ -15,6 +17,27 @@ class StudentViewSet(ModelViewSet):
     serializer_class = StudentProfileSerializer
     permission_classes = [IsClientUser]
     parser_classes = (MultiPartParser, FormParser)
+    filterset_class = StudentProfileFilter
+    search_fields = ['user__email', 'roll_number', 'first_name', 'last_name', 'department']
+    
+    # Sorting configuration
+    ordering_fields = ['id', 'user__email', 'roll_number', 'department', 'year', 'first_name', 'last_name', 'created_at', 'updated_at']
+    ordering = ['roll_number']
+    SORT_MAPPING = {
+        'id': 'id',
+        'email': 'user__email',
+        'roll_number': 'roll_number',
+        'department': 'department',
+        'year': 'year',
+        'first_name': 'first_name',
+        'last_name': 'last_name',
+        'created_at': 'created_at',
+        'updated_at': 'updated_at',
+    }
+    
+    def list(self, request, *args, **kwargs):
+        self.queryset = apply_sorting(request, self.get_queryset(), self)
+        return super().list(request, *args, **kwargs)
     
     @extend_schema(
         request=StudentCreationRequestSerializer,
@@ -146,6 +169,26 @@ class TeacherViewSet(ModelViewSet):
     serializer_class = TeacherProfileSerializer
     permission_classes = [IsClientUser]
     parser_classes = (MultiPartParser, FormParser)
+    filterset_class = TeacherProfileFilter
+    search_fields = ['user__email', 'employee_id', 'first_name', 'last_name', 'department']
+    
+    # Sorting configuration
+    ordering_fields = ['id', 'user__email', 'employee_id', 'department', 'first_name', 'last_name', 'created_at', 'updated_at']
+    ordering = ['employee_id']
+    SORT_MAPPING = {
+        'id': 'id',
+        'email': 'user__email',
+        'employee_id': 'employee_id',
+        'department': 'department',
+        'first_name': 'first_name',
+        'last_name': 'last_name',
+        'created_at': 'created_at',
+        'updated_at': 'updated_at',
+    }
+    
+    def list(self, request, *args, **kwargs):
+        self.queryset = apply_sorting(request, self.get_queryset(), self)
+        return super().list(request, *args, **kwargs)
     
     @extend_schema(
         request=TeacherCreationRequestSerializer,
@@ -182,6 +225,24 @@ class AdminViewSet(ModelViewSet):
     queryset = AdminProfile.objects.all()
     serializer_class = AdminProfileSerializer
     parser_classes = (MultiPartParser, FormParser)
+    filterset_class = AdminProfileFilter
+    search_fields = ['user__email', 'first_name', 'last_name']
+    
+    # Sorting configuration
+    ordering_fields = ['id', 'user__email', 'first_name', 'last_name', 'created_at', 'updated_at']
+    ordering = ['created_at']
+    SORT_MAPPING = {
+        'id': 'id',
+        'email': 'user__email',
+        'first_name': 'first_name',
+        'last_name': 'last_name',
+        'created_at': 'created_at',
+        'updated_at': 'updated_at',
+    }
+    
+    def list(self, request, *args, **kwargs):
+        self.queryset = apply_sorting(request, self.get_queryset(), self)
+        return super().list(request, *args, **kwargs)
     
     @extend_schema(
         request=AdminCreationRequestSerializer,
