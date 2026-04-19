@@ -6,11 +6,13 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
 from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog
+from ..filters import FaceDataFilter, FaceEmbeddingFilter, AttendanceFilter, AttendanceLogFilter
 from .serializers import (
     FaceDataSerializer, AttendanceSerializer, AttendanceReadSerializer, AttendanceLogSerializer,
     AttendanceMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer
 )
 from core.utils.custom_perms import IsClientUser
+from core.utils.sort import apply_sorting
 from ..ml_client import process_attendance, MLServiceError
 from django.utils import timezone
 import json
@@ -25,6 +27,27 @@ class FaceDataViewSet(viewsets.ModelViewSet):
     queryset = FaceData.objects.all()
     serializer_class = FaceDataSerializer
     permission_classes = [IsClientUser]
+    filterset_class = FaceDataFilter
+    search_fields = ['student__user__email', 'student__roll_number']
+    
+    # Sorting configuration
+    ordering_fields = ['id', 'student__user__email', 'student__roll_number', 'is_enrolled', 'total_photos_registered', 'registration_confidence', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+    SORT_MAPPING = {
+        'id': 'id',
+        'student_id': 'student__id',
+        'student_email': 'student__user__email',
+        'student_roll_number': 'student__roll_number',
+        'is_enrolled': 'is_enrolled',
+        'total_photos_registered': 'total_photos_registered',
+        'registration_confidence': 'registration_confidence',
+        'created_at': 'created_at',
+        'updated_at': 'updated_at',
+    }
+    
+    def list(self, request, *args, **kwargs):
+        self.queryset = apply_sorting(request, self.get_queryset(), self)
+        return super().list(request, *args, **kwargs)
     
     @extend_schema(
         responses={200: FaceDataSerializer},
@@ -56,6 +79,29 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated]
     parser_classes = (MultiPartParser, FormParser)
+    filterset_class = AttendanceFilter
+    search_fields = ['student__user__email', 'student__roll_number', 'class_session__class_name']
+    
+    # Sorting configuration
+    ordering_fields = ['id', 'student__user__email', 'student__roll_number', 'class_session__class_name', 'class_session__date', 'status', 'marked_at', 'created_at', 'updated_at']
+    ordering = ['-marked_at']
+    SORT_MAPPING = {
+        'id': 'id',
+        'student_id': 'student__id',
+        'student_email': 'student__user__email',
+        'student_roll_number': 'student__roll_number',
+        'class_session_id': 'class_session__id',
+        'class_session_name': 'class_session__class_name',
+        'class_date': 'class_session__date',
+        'status': 'status',
+        'marked_at': 'marked_at',
+        'created_at': 'created_at',
+        'updated_at': 'updated_at',
+    }
+    
+    def list(self, request, *args, **kwargs):
+        self.queryset = apply_sorting(request, self.get_queryset(), self)
+        return super().list(request, *args, **kwargs)
     
     def get_queryset(self):
         """Filter attendance based on user role"""
@@ -383,6 +429,30 @@ class AttendanceLogViewSet(viewsets.ReadOnlyModelViewSet):
     """
     serializer_class = AttendanceLogSerializer
     permission_classes = [IsAuthenticated]
+    filterset_class = AttendanceLogFilter
+    search_fields = ['attendance__student__user__email', 'attendance__student__roll_number']
+    
+    # Sorting configuration
+    ordering_fields = ['id', 'attendance__student__user__email', 'attendance__student__roll_number', 'attendance__class_session__class_name', 'face_confidence', 'distance_to_nearest', 'liveness_passed', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+    SORT_MAPPING = {
+        'id': 'id',
+        'attendance_id': 'attendance__id',
+        'student_id': 'attendance__student__id',
+        'student_email': 'attendance__student__user__email',
+        'student_roll_number': 'attendance__student__roll_number',
+        'class_session_id': 'attendance__class_session__id',
+        'class_session_name': 'attendance__class_session__class_name',
+        'face_confidence': 'face_confidence',
+        'distance_to_nearest': 'distance_to_nearest',
+        'liveness_passed': 'liveness_passed',
+        'created_at': 'created_at',
+        'updated_at': 'updated_at',
+    }
+    
+    def list(self, request, *args, **kwargs):
+        self.queryset = apply_sorting(request, self.get_queryset(), self)
+        return super().list(request, *args, **kwargs)
     
     def get_queryset(self):
         user = self.request.user

@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     
     'corsheaders',
     'rest_framework',
+    'django_filters',
     'drf_spectacular',
     
     'accounts',
@@ -163,6 +164,12 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "core.utils.sort.MultiFieldSortFunction",
+        'rest_framework.filters.OrderingFilter',
+        'rest_framework.filters.SearchFilter',
+    ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
