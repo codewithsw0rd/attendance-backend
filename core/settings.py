@@ -32,6 +32,10 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = 'django-insecure-q8nm=2qj6r5l9m@lnhf=b(h@1e7)8^p&f31vmyn_)!&12zkn2*'
 
 # SECURITY WARNING: don't run with debug turned on in production!
+ENVIRONMENT = env('ENVIRONMENT', default='local')
+IS_PRODUCTION = ENVIRONMENT == 'production'
+IS_LOCAL = ENVIRONMENT == 'local'
+
 DEBUG = True
 
 ALLOWED_HOSTS = ['.onrender.com', 'localhost', '127.0.0.1']
@@ -40,6 +44,7 @@ ALLOWED_HOSTS = ['.onrender.com', 'localhost', '127.0.0.1']
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -90,7 +95,25 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'core.wsgi.application'
+ASGI_APPLICATION = 'core.asgi.application'
 
+if IS_PRODUCTION:
+    # Production: Use Redis for persistent WebSocket connections
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [env('REDIS_URL', default='redis://127.0.0.1:6379/0')],
+            },
+        },
+    }
+else:
+    # Local Development: Use InMemory (fast, no external dependency)
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer"
+        }
+    }
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases

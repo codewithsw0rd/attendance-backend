@@ -40,6 +40,37 @@ class FaceEmbedding(BaseModel):
         unique_together = ('face_data', 'photo_number')
         ordering = ['photo_number']
 
+class AttendanceSession(BaseModel):
+    """Real-time attendance session tracking"""
+    class_session = models.ForeignKey(
+        ClassSession,
+        on_delete=models.CASCADE,
+        related_name='real_time_sessions',
+        help_text="Class session this attendance is for"
+    )
+    initiated_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='attendance_sessions',
+        help_text="Teacher who initiated this session"
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    marked_students = models.JSONField(
+        default=list,
+        help_text="List of student user IDs detected during session"
+    )
+    
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['class_session', 'started_at']),
+            models.Index(fields=['ended_at']),
+        ]
+    
+    def __str__(self):
+        return f"Session for {self.class_session.class_name} ({self.started_at})"
 
 class Attendance(BaseModel):
     PRESENCE_CHOICES = [
@@ -49,12 +80,43 @@ class Attendance(BaseModel):
     
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='attendances')
     class_session = models.ForeignKey(ClassSession, on_delete=models.CASCADE, related_name='attendances')
+    attendance_session = models.ForeignKey(
+        AttendanceSession,
+        on_delete=models.CASCADE,
+        related_name='attendances',
+        null=True,
+        blank=True,
+        help_text="Link to the real-time session during which this attendance was marked"
+    )
     status = models.CharField(max_length=10, choices=PRESENCE_CHOICES, default='ABSENT')
     marked_at = models.DateTimeField(auto_now_add=True)
+
+    frame_detected = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when face was detected in video frame"
+    )
+    detection_confidence = models.FloatField(
+        default=0.0,
+        help_text="Face recognition confidence score (0-1) from ML service"
+    )
     
     class Meta:
-        unique_together = ('student', 'class_session')
         ordering = ['-marked_at']
+        constraints = [
+            # Prevent duplicate attendance within same session
+            models.UniqueConstraint(
+                fields=['student', 'attendance_session'],
+                condition=models.Q(attendance_session__isnull=False),
+                name='unique_attendance_per_session'
+            ),
+            # Keep old constraint for backward compatibility with manual marking
+            models.UniqueConstraint(
+                fields=['student', 'class_session'],
+                condition=models.Q(attendance_session__isnull=True),
+                name='unique_attendance_manual_marking'
+            )
+        ]
     
     def __str__(self):
         return f"{self.student.user.email} - {self.class_session.class_name} - {self.status}"

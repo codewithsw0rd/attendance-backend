@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from ..models import FaceData, Attendance, AttendanceLog, FaceEmbedding
+from ..models import FaceData, Attendance, AttendanceLog, FaceEmbedding, AttendanceSession
 
 class FaceEmbeddingSerializer(serializers.ModelSerializer):
     class Meta:
@@ -109,3 +109,61 @@ class SessionSummarySerializer(serializers.Serializer):
     present = serializers.IntegerField(help_text="Number of present students")
     absent = serializers.IntegerField(help_text="Number of absent students")
     attendance_rate = serializers.FloatField(help_text="Attendance percentage (0-100)")
+
+
+class AttendanceSessionSerializer(serializers.ModelSerializer):
+    """Serializer for real-time attendance sessions"""
+    class_session_detail = serializers.SerializerMethodField()
+    initiated_by_email = serializers.EmailField(source='initiated_by.email', read_only=True)
+    marked_students_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AttendanceSession
+        fields = [
+            'id', 'class_session', 'class_session_detail', 'initiated_by', 
+            'initiated_by_email', 'started_at', 'ended_at', 'marked_students', 
+            'marked_students_count'
+        ]
+        read_only_fields = ['id', 'started_at', 'ended_at', 'marked_students']
+    
+    def get_class_session_detail(self, obj):
+        return {
+            'id': str(obj.class_session.id),
+            'class_name': obj.class_session.class_name,
+            'date': str(obj.class_session.date),
+        }
+    
+    def get_marked_students_count(self, obj):
+        return len(obj.marked_students) if obj.marked_students else 0
+
+
+class FrameDetectionResponseSerializer(serializers.Serializer):
+    """Response schema for frame detection via WebSocket"""
+    newly_detected = serializers.ListField(
+        child=serializers.DictField(),
+        help_text="List of newly detected students with confidence and timestamp"
+    )
+    already_marked = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Student IDs already marked in this session"
+    )
+    total_detected_so_far = serializers.IntegerField()
+    timestamp = serializers.DateTimeField()
+
+
+class SessionEndResponseSerializer(serializers.Serializer):
+    """Response schema for ending a session"""
+    session_id = serializers.UUIDField()
+    status = serializers.CharField()
+    marked_present = serializers.IntegerField()
+    marked_absent = serializers.IntegerField()
+    ended_at = serializers.DateTimeField()
+
+class StartSessionRequestSerializer(serializers.Serializer):
+    """Request schema for starting a real-time attendance session"""
+    class_session_id = serializers.UUIDField(required=True)
+
+
+class EndSessionRequestSerializer(serializers.Serializer):
+    """Request schema for ending a real-time attendance session"""
+    session_id = serializers.UUIDField(required=True)
