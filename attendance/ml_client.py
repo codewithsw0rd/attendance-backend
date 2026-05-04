@@ -11,6 +11,7 @@ from typing import List, Tuple, Optional
 ML_SERVICE_URL = getattr(settings, 'ML_SERVICE_URL', 'http://localhost:8000')
 ML_REGISTER_ENDPOINT = f'{ML_SERVICE_URL}/register-embedding'
 ML_ATTENDANCE_ENDPOINT = f'{ML_SERVICE_URL}/process-attendance'
+ML_CONTINUOUS_DETECTION_ENDPOINT = f'{ML_SERVICE_URL}/continuous-detection'
 
 
 class MLServiceError(Exception):
@@ -118,3 +119,64 @@ def check_ml_service_health() -> bool:
         return response.status_code == 200
     except:
         return False
+
+def process_continuous_detection(
+    image_file,
+    stored_embeddings: List[List[float]],
+    student_ids: List[str],
+    session_id: str = ""
+) -> dict:
+    """
+    Call ML service to detect all faces in frame and match each against stored embeddings.
+    
+    This is used for real-time continuous detection during attendance streaming.
+    Unlike process_attendance which returns a single best match, this returns
+    a list of all detected and matched faces.
+    
+    Args:
+        image_file: Django UploadedFile object or BytesIO stream
+        stored_embeddings: List of embedding vectors from database
+        student_ids: List of corresponding student user IDs
+        session_id: Optional session ID for reference/logging
+    
+    Returns:
+        dict with structure:
+        {
+            'detections': [
+                {
+                    'student_id': 'uuid1',
+                    'confidence': 0.92,
+                    'distance': 0.23
+                },
+                ...
+            ],
+            'total_faces_detected': 2,
+            'status': 'success'  # or 'no_faces', 'no_matches'
+        }
+    
+    Raises:
+        MLServiceError: If ML service fails to process frame
+    """
+    try:
+        files = {'image': image_file}
+        data = {
+            'session_id': session_id,
+            'stored_vectors': json.dumps(stored_embeddings),
+            'labels': json.dumps(student_ids)
+        }
+        
+        response = requests.post(
+            ML_CONTINUOUS_DETECTION_ENDPOINT,
+            files=files,
+            data=data,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            error_detail = response.json().get('detail', 'Unknown error')
+            raise MLServiceError(f"ML Service Error: {error_detail}")
+        
+        return response.json()
+    
+    except requests.exceptions.RequestException as e:
+        raise MLServiceError(f"Failed to connect to ML service: {str(e)}")

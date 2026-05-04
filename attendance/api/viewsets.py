@@ -5,11 +5,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
-from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog
+from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog, AttendanceSession
 from ..filters import FaceDataFilter, FaceEmbeddingFilter, AttendanceFilter, AttendanceLogFilter
+from rest_framework import serializers
 from .serializers import (
     FaceDataSerializer, AttendanceSerializer, AttendanceReadSerializer, AttendanceLogSerializer,
-    AttendanceMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer
+    AttendanceMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer, 
+    SessionEndResponseSerializer, AttendanceSessionSerializer,
+    StartSessionRequestSerializer, EndSessionRequestSerializer
 )
 from core.utils.custom_perms import IsClientUser
 from core.utils.sort import apply_sorting
@@ -421,7 +424,187 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+    @extend_schema(
+        request=StartSessionRequestSerializer,
+        responses={201: AttendanceSessionSerializer},
+        description="Start real-time attendance session. Teacher initiates camera streaming for continuous face detection."
+    )
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def start_session(self, request, *args, **kwargs):
+        """
+        Start a new real-time attendance session.
+        Only teachers can initiate sessions for their classes.
+        
+        Request (JSON):
+            - class_session_id: UUID of the class session
+        
+        Response: AttendanceSession details with session ID for WebSocket connection
+        """
+        if request.user.user_type != UserType.TEACHER:
+            return Response(
+                {'detail': 'Only teachers can start attendance sessions'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        class_session_id = request.data.get('class_session_id')
+        if not class_session_id:
+            return Response(
+                {'detail': 'class_session_id required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            class_session = ClassSession.objects.get(id=class_session_id)
+            # Verify teacher teaches this class
+            if class_session.subject.teacher.user != request.user:
+                return Response(
+                    {'detail': 'You do not teach this class'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except ClassSession.DoesNotExist:
+            return Response(
+                {'detail': 'Class session not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Create new session
+        from ..models import AttendanceSession
+        session = AttendanceSession.objects.create(
+            class_session=class_session,
+            initiated_by=request.user,
+            marked_students=[]
+        )
+        
+        serializer = AttendanceSessionSerializer(session)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @extend_schema(
+        request=EndSessionRequestSerializer,
+        responses={200: SessionEndResponseSerializer},
+        description="End attendance session and auto-mark absent students"
+    )
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def end_session(self, request, *args, **kwargs):
+        """
+        End real-time attendance session and auto-mark absent students.
+        
+        Process:
+            1. Closes the attendance session
+            2. Gets all students enrolled in the class
+            3. Marks as ABSENT any student NOT detected during session
+            4. Returns summary statistics
+        
+        Request (JSON):
+            - session_id: UUID of the AttendanceSession to close
+        
+        Response: Session summary with present/absent counts
+        """
+        session_id = request.data.get('session_id')
+        if not session_id:
+            return Response(
+                {'detail': 'session_id required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from ..models import AttendanceSession
+        try:
+            session = AttendanceSession.objects.get(id=session_id, ended_at=None)
+        except AttendanceSession.DoesNotExist:
+            return Response(
+                {'detail': 'Session not found or already ended'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify requester is the teacher who started the session
+        if session.initiated_by != request.user:
+            return Response(
+                {'detail': 'Only session initiator can end session'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get all enrolled students in this class
+        enrolled = Enrollment.objects.filter(subject=session.class_session.subject)
+        
+        # Mark as ABSENT if not detected
+        marked_student_ids = session.marked_students
+        for enrollment in enrolled:
+            student_user_id = str(enrollment.student.user.id)
+            if student_user_id not in marked_student_ids:
+                Attendance.objects.get_or_create(
+                    student=enrollment.student,
+                    class_session=session.class_session,
+                    attendance_session=session,
+                    defaults={
+                        'status': 'ABSENT',
+                        'frame_detected': timezone.now(),
+                        'detection_confidence': 0.0
+                    }
+                )
+        
+        # Close session
+        session.ended_at = timezone.now()
+        session.save()
+        
+        # Return summary
+        present_count = Attendance.objects.filter(
+            attendance_session=session,
+            status='PRESENT'
+        ).count()
+        absent_count = Attendance.objects.filter(
+            attendance_session=session,
+            status='ABSENT'
+        ).count()
+        
+        return Response({
+            'session_id': str(session.id),
+            'status': 'ended',
+            'marked_present': present_count,
+            'marked_absent': absent_count,
+            'ended_at': session.ended_at.isoformat()
+        }, status=status.HTTP_200_OK)
+
+
+    @extend_schema(
+    responses={200: serializers.Serializer()},
+    description="WebSocket endpoint for real-time attendance streaming (Not a REST endpoint).\n\n"
+                "WEBSOCKET PROTOCOL:\n"
+                "Connection URL: ws://host/ws/attendance/stream/{session_id}/\n\n"
+                "Flow:\n"
+                "1. Teacher starts a session via POST /attendance/start_session/\n"
+                "2. Connect to WebSocket with the returned session_id\n"
+                "3. Send video frames continuously (binary data)\n"
+                "4. Receive detection results in real-time\n"
+                "5. End session via POST /attendance/end_session/\n\n"
+                "Message Formats:\n"
+                "INCOMING (Server → Client):\n"
+                "{\n"
+                "  'type': 'connection_established',\n"
+                "  'status': 'connected',\n"
+                "  'session_id': 'uuid',\n"
+                "  'message': 'Ready to receive frames'\n"
+                "}\n"
+                "OR\n"
+                "{\n"
+                "  'type': 'frame_processed',\n"
+                "  'newly_detected': [\n"
+                "    {'student_id': 'uuid', 'student_email': 'email@example.com', "
+                "'confidence': 0.92, 'detected_at': 'timestamp'}\n"
+                "  ],\n"
+                "  'timestamp': 'timestamp'\n"
+                "}\n\n"
+                "OUTGOING (Client → Server):\n"
+                "Binary frame data (JPEG/PNG image bytes)\n\n"
+                "Only the teacher who initiated the session can connect. "
+                "Authentication is required via AuthMiddlewareStack.",
+    tags=['Real-Time Attendance'],
+    exclude=True  # Exclude from REST schema as it's WebSocket, not REST
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def websocket_stream(self, request):
+        """WebSocket documentation endpoint (for schema only)"""
+        pass
+
+    
 class AttendanceLogViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Verification logs for attendance. Read-only for auditing purposes.

@@ -1,0 +1,211 @@
+"""
+WebSocket consumer for real-time attendance streaming.
+Handles continuous frame processing and face detection.
+"""
+import json
+import logging
+from io import BytesIO
+from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.db import database_sync_to_async
+from django.utils import timezone
+from uuid import UUID
+
+from attendance.models import AttendanceSession, Attendance, FaceData, FaceEmbedding
+from academics.models import Enrollment
+from attendance.ml_client import process_continuous_detection, MLServiceError
+from academics.models import ClassSession
+
+logger = logging.getLogger(__name__)
+
+
+class AttendanceStreamConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for real-time attendance streaming.
+    
+    Flow:
+    1. Client connects: ws://host/ws/attendance/stream/{session_id}/
+    2. Consumer validates session and sends connection confirmation
+    3. Client sends video frames as binary data
+    4. Consumer processes frame, detects faces, deduplicates
+    5. Consumer sends back detected students
+    6. Repeat until client disconnects or session ends
+    """
+    
+    async def connect(self):
+        """Handle WebSocket connection"""
+        self.session_id = self.scope['url_route']['kwargs']['session_id']
+        self.session_group_name = f'attendance_session_{self.session_id}'
+        
+        # Validate session exists
+        session = await self.get_session()
+        if not session:
+            await self.close(code=4004)
+            return
+        
+        # Verify user is the teacher who initiated session
+        if self.scope['user'].id != session.initiated_by.id:
+            await self.close(code=4003)
+            return
+        
+        await self.channel_layer.group_add(self.session_group_name, self.channel_name)
+        await self.accept()
+        
+        logger.info(f"WebSocket connected for session {self.session_id}")
+        await self.send(json.dumps({
+            'type': 'connection_established',
+            'session_id': str(self.session_id),
+            'status': 'connected',
+            'message': 'Ready to receive frames'
+        }))
+    
+    async def receive(self, bytes_data=None):
+        """Receive and process video frame"""
+        if not bytes_data:
+            return
+        
+        try:
+            # Frame received as binary; process it
+            frame_io = BytesIO(bytes_data)
+            detections = await self.process_frame(frame_io)
+            
+            await self.send(json.dumps({
+                'type': 'frame_processed',
+                'newly_detected': detections,
+                'timestamp': timezone.now().isoformat()
+            }))
+        except Exception as e:
+            logger.error(f"Error processing frame: {str(e)}")
+            await self.send(json.dumps({
+                'type': 'error',
+                'detail': str(e)
+            }))
+    
+    async def disconnect(self, close_code):
+        """Handle WebSocket disconnection"""
+        await self.channel_layer.group_discard(self.session_group_name, self.channel_name)
+        logger.info(f"WebSocket disconnected for session {self.session_id} with code {close_code}")
+    
+    @database_sync_to_async
+    def get_session(self):
+        """Get AttendanceSession, ensuring it's still active"""
+        try:
+            return AttendanceSession.objects.get(
+                id=UUID(self.session_id),
+                ended_at=None
+            )
+        except Exception as e:
+            logger.error(f"Session not found: {str(e)}")
+            return None
+    
+    @database_sync_to_async
+    def process_frame(self, frame_io):
+        """
+        Process a single video frame:
+        1. Get all enrolled students' embeddings
+        2. Call ML service for multi-face detection
+        3. Deduplicate: only create Attendance if not already marked
+        4. Return newly detected students
+        """
+        try:
+            session = AttendanceSession.objects.get(
+                id=UUID(self.session_id),
+                ended_at=None
+            )
+            class_session = session.class_session
+            
+            # ─── Get all enrolled students' embeddings ────────────────
+            enrolled = Enrollment.objects.filter(
+                subject=class_session.subject
+            ).select_related('student', 'student__user')
+            
+            stored_embeddings = []
+            student_ids = []
+            
+            for enrollment in enrolled:
+                try:
+                    face_data = FaceData.objects.get(
+                        student=enrollment.student,
+                        is_enrolled=True
+                    )
+                    embeddings = FaceEmbedding.objects.filter(
+                        face_data=face_data
+                    ).order_by('photo_number')
+                    
+                    for emb in embeddings:
+                        stored_embeddings.append(emb.embedding)
+                        student_ids.append(str(enrollment.student.user.id))
+                except FaceData.DoesNotExist:
+                    # Skip students without completed enrollment
+                    pass
+            
+            if not stored_embeddings:
+                logger.warning(f"No enrolled students with registered faces for session {self.session_id}")
+                return []
+            
+            # ─── Call ML service for multi-face detection ──────────────
+            try:
+                ml_result = process_continuous_detection(
+                    frame_io,
+                    stored_embeddings,
+                    student_ids,
+                    session_id=str(session.id)
+                )
+            except MLServiceError as e:
+                logger.error(f"ML Service error: {str(e)}")
+                raise Exception(f"ML Service Error: {str(e)}")
+            
+            # ─── Process detections and deduplicate ────────────────────
+            newly_detected = []
+            marked_student_ids = session.marked_students if session.marked_students else []
+            
+            for detection in ml_result.get('detections', []):
+                student_id = detection.get('student_id')
+                confidence = detection.get('confidence', 0.0)
+                distance = detection.get('distance', 0.0)
+                
+                # Check if student already marked in this session
+                if student_id and student_id not in marked_student_ids:
+                    try:
+                        # Get the enrollment to create attendance
+                        enrollment = Enrollment.objects.get(
+                            subject=class_session.subject,
+                            student__user__id=UUID(student_id)
+                        )
+                        
+                        # Create attendance record
+                        Attendance.objects.create(
+                            student=enrollment.student,
+                            class_session=class_session,
+                            attendance_session=session,
+                            status='PRESENT',
+                            frame_detected=timezone.now(),
+                            detection_confidence=confidence
+                        )
+                        
+                        # Add to session's marked list
+                        marked_student_ids.append(student_id)
+                        session.marked_students = marked_student_ids
+                        session.save()
+                        
+                        # Prepare response
+                        newly_detected.append({
+                            'student_id': student_id,
+                            'student_email': enrollment.student.user.email,
+                            'confidence': round(confidence, 4),
+                            'distance': round(distance, 6),
+                            'detected_at': timezone.now().isoformat()
+                        })
+                        
+                        logger.info(f"Student {student_id} marked present in session {self.session_id}")
+                    except Enrollment.DoesNotExist:
+                        logger.warning(f"Enrollment not found for student {student_id}")
+                        pass
+                    except Exception as e:
+                        logger.error(f"Error creating attendance: {str(e)}")
+                        pass
+            
+            return newly_detected
+            
+        except Exception as e:
+            logger.error(f"Frame processing error: {str(e)}")
+            raise
