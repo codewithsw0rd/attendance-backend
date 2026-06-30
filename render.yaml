@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: attendance-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py migrate && daphne -b 0.0.0.0 -p $PORT core.asgi:application
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ML_SERVICE_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
