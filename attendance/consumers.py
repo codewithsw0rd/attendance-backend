@@ -120,6 +120,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                 'total_faces_detected': detections.get('total_faces_detected', 0),
                 'enrolled_embeddings': detections.get('enrolled_embeddings', 0),
                 'nearest_distance': detections.get('nearest_distance'),
+                'faces': detections.get('faces', []),
                 'timestamp': timezone.now().isoformat()
             }))
         except Exception as e:
@@ -220,6 +221,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                     'ml_status': 'no_enrolled_faces',
                     'total_faces_detected': 0,
                     'enrolled_embeddings': 0,
+                    'faces': [],
                 }
             
             # ─── Call ML service for multi-face detection ──────────────
@@ -292,6 +294,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                 'total_faces_detected': ml_result.get('total_faces_detected', 0),
                 'enrolled_embeddings': len(stored_embeddings),
                 'nearest_distance': ml_result.get('nearest_distance'),
+                'faces': ml_result.get('faces', []),
             }
             
         except Exception as e:
