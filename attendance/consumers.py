@@ -11,10 +11,9 @@ from channels.db import database_sync_to_async
 from django.utils import timezone
 from uuid import UUID
 
-from attendance.models import AttendanceSession, Attendance, FaceData, FaceEmbedding
+from attendance.models import AttendanceSession, Attendance, FaceData
 from academics.models import Enrollment
 from attendance.ml_client import process_continuous_detection, MLServiceError
-from academics.models import ClassSession
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +258,9 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
 
         try:
             session = await database_sync_to_async(
-                AttendanceSession.objects.select_related('class_session').get
+                AttendanceSession.objects.select_related(
+                    'class_session', 'class_session__subject'
+                ).get
             )(id=UUID(self.session_id), ended_at=None)
         except AttendanceSession.DoesNotExist:
             logger.error(f"Session {self.session_id} not found or already ended")
