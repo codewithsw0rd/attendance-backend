@@ -12,6 +12,9 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         fields = '__all__'
         
 class ClassSessionSerializer(serializers.ModelSerializer):
+    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    subject_code = serializers.CharField(source='subject.code', read_only=True)
+    
     class Meta:
         model = ClassSession
-        fields = '__all__'
+        fields = ['id', 'class_name', 'date', 'start_time', 'end_time', 'subject', 'subject_name', 'subject_code', 'created_at', 'updated_at']
