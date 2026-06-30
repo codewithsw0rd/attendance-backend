@@ -99,13 +99,12 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         - Binary frames (raw JPEG/PNG bytes)
         - JSON text frames: {"type": "frame", "data": "<data-url or base64>"}
 
-        Uses an asyncio.Lock to prevent concurrent ML calls. If the ML service
-        on Render takes longer than _PROCESSING_TIMEOUT seconds, we give up on
-        that frame so the next one can be processed immediately — this avoids
-        the 40-second freeze when the user re-enters the camera frame.
+        Uses a boolean flag + asyncio.wait_for to prevent concurrent ML calls.
+        If the ML service (Render) takes longer than _PROCESSING_TIMEOUT seconds,
+        we abort the wait and send an empty-faces response so the stream recovers
+        immediately when the user re-enters the camera frame.
         """
-        # Non-blocking acquire: if already processing, silently drop this frame
-        # (prevents queue build-up / buffer bloat on slow Render responses).
+        # Drop frame if still processing — prevents queue buildup
         if self._frame_lock.locked():
             return
 
@@ -139,30 +138,32 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             if frame_io is None:
                 return
 
-            # Attempt to acquire the lock; time-box the entire ML round-trip.
-            # If it exceeds _PROCESSING_TIMEOUT, release and send empty faces so
-            # the frontend clears stale bounding boxes and stays live.
-            try:
-                async with asyncio.timeout(_PROCESSING_TIMEOUT):
-                    async with self._frame_lock:
-                        detections = await self.process_frame(frame_io)
-            except TimeoutError:
-                logger.warning(
-                    f"ML frame timed out after {_PROCESSING_TIMEOUT}s for "
-                    f"session {self.session_id} — releasing lock"
-                )
-                # Send an empty-faces payload so the frontend clears boxes
-                await self.send(json.dumps({
-                    'type': 'frame_processed',
-                    'newly_detected': [],
-                    'ml_status': 'timeout',
-                    'total_faces_detected': 0,
-                    'enrolled_embeddings': len(self._embeddings_cache),
-                    'nearest_distance': None,
-                    'faces': [],
-                    'timestamp': timezone.now().isoformat()
-                }))
-                return
+            # Time-box the ML round-trip with wait_for.
+            # On timeout the lock is released by the finally clause below so
+            # the very next frame can be processed without delay.
+            async with self._frame_lock:
+                try:
+                    detections = await asyncio.wait_for(
+                        self.process_frame(frame_io),
+                        timeout=_PROCESSING_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"ML frame timed out after {_PROCESSING_TIMEOUT}s for "
+                        f"session {self.session_id} — resetting"
+                    )
+                    # Send empty faces so the frontend clears stale boxes
+                    await self.send(json.dumps({
+                        'type': 'frame_processed',
+                        'newly_detected': [],
+                        'ml_status': 'timeout',
+                        'total_faces_detected': 0,
+                        'enrolled_embeddings': len(self._embeddings_cache),
+                        'nearest_distance': None,
+                        'faces': [],
+                        'timestamp': timezone.now().isoformat()
+                    }))
+                    return
 
             await self.send(json.dumps({
                 'type': 'frame_processed',
