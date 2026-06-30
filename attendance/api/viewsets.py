@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
 from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog, AttendanceSession
@@ -81,7 +81,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     - Marking attendance via face recognition
     """
     permission_classes = [IsAuthenticated]
-    parser_classes = (MultiPartParser, FormParser)
+    parser_classes = (JSONParser, MultiPartParser, FormParser)
     filterset_class = AttendanceFilter
     search_fields = ['student__user__email', 'student__roll_number', 'class_session__class_name']
     
