@@ -2,6 +2,7 @@
 WebSocket consumer for real-time attendance streaming.
 Handles continuous frame processing and face detection.
 """
+import asyncio
 import json
 import logging
 from io import BytesIO
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 # Maximum number of frames to wait before refreshing the embedding cache.
 # Handles the edge case where a student enrolls mid-session.
 _CACHE_REFRESH_INTERVAL = 300
+
+# If the ML service (Render) takes longer than this many seconds, release the
+# processing lock so the stream doesn't freeze when the user re-enters frame.
+_PROCESSING_TIMEOUT = 12.0
 
 
 class AttendanceStreamConsumer(AsyncWebsocketConsumer):
@@ -72,7 +77,9 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         self._embeddings_cache: list[list[float]] = []
         self._student_ids_cache: list[str] = []
         self._cache_frame_count: int = 0
-        self._is_processing = False
+        # asyncio.Lock prevents concurrent ML calls without permanently locking
+        # on Render timeouts (unlike a plain boolean flag).
+        self._frame_lock = asyncio.Lock()
         await self._refresh_embedding_cache()
 
         await self.accept()
@@ -87,16 +94,21 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
     
     async def receive(self, text_data=None, bytes_data=None):
         """Receive and process video frame
-        
+
         Supports:
         - Binary frames (raw JPEG/PNG bytes)
         - JSON text frames: {"type": "frame", "data": "<data-url or base64>"}
+
+        Uses an asyncio.Lock to prevent concurrent ML calls. If the ML service
+        on Render takes longer than _PROCESSING_TIMEOUT seconds, we give up on
+        that frame so the next one can be processed immediately — this avoids
+        the 40-second freeze when the user re-enters the camera frame.
         """
-        # Drop frame if we are already processing one to prevent queue buildup (buffer bloat)
-        if getattr(self, '_is_processing', False):
+        # Non-blocking acquire: if already processing, silently drop this frame
+        # (prevents queue build-up / buffer bloat on slow Render responses).
+        if self._frame_lock.locked():
             return
-        
-        self._is_processing = True
+
         try:
             frame_io = None
 
@@ -122,13 +134,35 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                     return
 
             elif bytes_data:
-                # Frame received as binary; process it directly
                 frame_io = BytesIO(bytes_data)
 
             if frame_io is None:
                 return
 
-            detections = await self.process_frame(frame_io)
+            # Attempt to acquire the lock; time-box the entire ML round-trip.
+            # If it exceeds _PROCESSING_TIMEOUT, release and send empty faces so
+            # the frontend clears stale bounding boxes and stays live.
+            try:
+                async with asyncio.timeout(_PROCESSING_TIMEOUT):
+                    async with self._frame_lock:
+                        detections = await self.process_frame(frame_io)
+            except TimeoutError:
+                logger.warning(
+                    f"ML frame timed out after {_PROCESSING_TIMEOUT}s for "
+                    f"session {self.session_id} — releasing lock"
+                )
+                # Send an empty-faces payload so the frontend clears boxes
+                await self.send(json.dumps({
+                    'type': 'frame_processed',
+                    'newly_detected': [],
+                    'ml_status': 'timeout',
+                    'total_faces_detected': 0,
+                    'enrolled_embeddings': len(self._embeddings_cache),
+                    'nearest_distance': None,
+                    'faces': [],
+                    'timestamp': timezone.now().isoformat()
+                }))
+                return
 
             await self.send(json.dumps({
                 'type': 'frame_processed',
@@ -146,8 +180,6 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                 'type': 'error',
                 'detail': str(e)
             }))
-        finally:
-            self._is_processing = False
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
