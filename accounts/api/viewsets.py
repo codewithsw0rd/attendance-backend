@@ -113,6 +113,10 @@ class StudentViewSet(ModelViewSet):
                     # at enrollment causes poor matching for the lifetime of the account.
                     MIN_QUALITY = 0.35
                     if quality_score < MIN_QUALITY:
+                        # IMPORTANT: @transaction.atomic only rolls back on exceptions,
+                        # NOT on return statements. We must explicitly signal a rollback
+                        # so the user/student created above is discarded.
+                        transaction.set_rollback(True)
                         return Response(
                             {
                                 'error': (
@@ -134,6 +138,8 @@ class StudentViewSet(ModelViewSet):
                     )
 
                 except MLServiceError as e:
+                    # Roll back the user/student creation so the email can be reused.
+                    transaction.set_rollback(True)
                     return Response(
                         {'error': f'Failed to process image {photo_number}: {str(e)}'},
                         status=status.HTTP_400_BAD_REQUEST
@@ -175,6 +181,8 @@ class StudentViewSet(ModelViewSet):
             )
         
         except Exception as e:
+            # Roll back any DB writes before returning the 500.
+            transaction.set_rollback(True)
             return Response(
                 {'error': f'Error processing face images: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
