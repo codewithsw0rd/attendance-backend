@@ -1,15 +1,16 @@
 from .serializers import *
 from rest_framework import viewsets
+from rest_framework.exceptions import PermissionDenied
 from ..models import Subject, Enrollment, ClassSession
 from ..filters import SubjectFilter, EnrollmentFilter, ClassSessionFilter
-from core.utils.custom_perms import IsClientUser
+from core.utils.custom_perms import IsClientUser, IsAdminOrTeacher
 from core.utils.sort import apply_sorting
+from accounts.models import UserType
 
 
 class SubjectViewSet(viewsets.ModelViewSet):
     queryset = Subject.objects.all()
     serializer_class = SubjectSerializer
-    permission_classes = [IsClientUser]
     filterset_class = SubjectFilter
     search_fields = ['name', 'code', 'department']
     
@@ -26,6 +27,21 @@ class SubjectViewSet(viewsets.ModelViewSet):
         'created_at': 'created_at',
         'updated_at': 'updated_at',
     }
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+            return [IsClientUser()]
+        return [IsAdminOrTeacher()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return Subject.objects.none()
+        if user.user_type == UserType.ADMIN:
+            return Subject.objects.all()
+        if user.user_type == UserType.TEACHER:
+            return Subject.objects.filter(teacher__user=user)
+        return Subject.objects.none()
     
     def list(self, request, *args, **kwargs):
         self.queryset = apply_sorting(request, self.get_queryset(), self)
@@ -61,7 +77,6 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
 class ClassSessionViewSet(viewsets.ModelViewSet):
     queryset = ClassSession.objects.all()
     serializer_class = ClassSessionSerializer
-    permission_classes = [IsClientUser]
     filterset_class = ClassSessionFilter
     search_fields = ['class_name', 'subject__name', 'subject__code']
     
@@ -80,6 +95,36 @@ class ClassSessionViewSet(viewsets.ModelViewSet):
         'created_at': 'created_at',
         'updated_at': 'updated_at',
     }
+
+    def get_permissions(self):
+        if self.action == 'destroy':
+            return [IsClientUser()]
+        return [IsAdminOrTeacher()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return ClassSession.objects.none()
+        if user.user_type == UserType.ADMIN:
+            return ClassSession.objects.all()
+        if user.user_type == UserType.TEACHER:
+            return ClassSession.objects.filter(subject__teacher__user=user)
+        return ClassSession.objects.none()
+
+    def _ensure_teacher_owns_subject(self, subject):
+        user = self.request.user
+        if user.user_type == UserType.TEACHER and subject.teacher.user != user:
+            raise PermissionDenied('You can only manage sessions for your own subjects.')
+
+    def perform_create(self, serializer):
+        self._ensure_teacher_owns_subject(serializer.validated_data['subject'])
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._ensure_teacher_owns_subject(
+            serializer.validated_data.get('subject', serializer.instance.subject)
+        )
+        serializer.save()
     
     def list(self, request, *args, **kwargs):
         self.queryset = apply_sorting(request, self.get_queryset(), self)
