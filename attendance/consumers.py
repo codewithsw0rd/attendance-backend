@@ -72,6 +72,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         self._embeddings_cache: list[list[float]] = []
         self._student_ids_cache: list[str] = []
         self._cache_frame_count: int = 0
+        self._is_processing = False
         await self._refresh_embedding_cache()
 
         await self.accept()
@@ -91,6 +92,11 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         - Binary frames (raw JPEG/PNG bytes)
         - JSON text frames: {"type": "frame", "data": "<data-url or base64>"}
         """
+        # Drop frame if we are already processing one to prevent queue buildup (buffer bloat)
+        if getattr(self, '_is_processing', False):
+            return
+        
+        self._is_processing = True
         try:
             frame_io = None
 
@@ -140,6 +146,8 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                 'type': 'error',
                 'detail': str(e)
             }))
+        finally:
+            self._is_processing = False
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
