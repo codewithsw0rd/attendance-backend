@@ -33,18 +33,24 @@ class AttendanceLogSerializer(serializers.ModelSerializer):
 class AttendanceSerializer(serializers.ModelSerializer):
     student_email = serializers.EmailField(source='student.user.email', read_only=True)
     student_name = serializers.CharField(source='student.first_name', read_only=True)
-    verification_log = AttendanceLogSerializer(read_only=True)
+    verification_log = serializers.SerializerMethodField()
     
     class Meta:
         model = Attendance
         fields = ['id', 'student', 'student_email', 'student_name', 'class_session', 'status', 'marked_at', 'verification_log']
         read_only_fields = ['id', 'marked_at', 'verification_log']
 
+    def get_verification_log(self, obj):
+        latest_log = obj.verification_log.order_by('-created_at').first()
+        if not latest_log:
+            return None
+        return AttendanceLogSerializer(latest_log).data
+
 
 class AttendanceReadSerializer(serializers.ModelSerializer):
     student_detail = serializers.SerializerMethodField()
     class_session_detail = serializers.SerializerMethodField()
-    verification_log = AttendanceLogSerializer(read_only=True)
+    verification_log = serializers.SerializerMethodField()
     
     class Meta:
         model = Attendance
@@ -65,6 +71,12 @@ class AttendanceReadSerializer(serializers.ModelSerializer):
             'date': obj.class_session.date,
             'start_time': obj.class_session.start_time,
         }
+
+    def get_verification_log(self, obj):
+        latest_log = obj.verification_log.order_by('-created_at').first()
+        if not latest_log:
+            return None
+        return AttendanceLogSerializer(latest_log).data
 
 
 # Request/Response Serializers for Schema Documentation
