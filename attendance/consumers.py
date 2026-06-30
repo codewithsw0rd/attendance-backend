@@ -36,19 +36,33 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         """Handle WebSocket connection"""
         self.session_id = self.scope['url_route']['kwargs']['session_id']
         self.session_group_name = f'attendance_session_{self.session_id}'
-        
-        # Validate session exists
-        session = await self.get_session()
-        if not session:
-            await self.close(code=4004)
-            return
-        
-        # Verify user is the teacher who initiated session
-        if self.scope['user'].id != session.initiated_by.id:
+        user = self.scope['user']
+
+        if not user.is_authenticated:
+            logger.warning(f"WebSocket auth failed for session {self.session_id}")
             await self.close(code=4003)
             return
-        
-        await self.channel_layer.group_add(self.session_group_name, self.channel_name)
+
+        session_data = await self.get_session_data()
+        if not session_data:
+            await self.close(code=4004)
+            return
+
+        if user.id != session_data['initiated_by_id']:
+            logger.warning(
+                f"WebSocket user {user.id} is not initiator "
+                f"{session_data['initiated_by_id']} for session {self.session_id}"
+            )
+            await self.close(code=4003)
+            return
+
+        try:
+            await self.channel_layer.group_add(self.session_group_name, self.channel_name)
+        except Exception as e:
+            logger.error(f"Channel layer group_add failed: {str(e)}")
+            await self.close(code=1011)
+            return
+
         await self.accept()
         
         logger.info(f"WebSocket connected for session {self.session_id}")
@@ -113,9 +127,35 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
-        await self.channel_layer.group_discard(self.session_group_name, self.channel_name)
+        if hasattr(self, 'session_group_name'):
+            try:
+                await self.channel_layer.group_discard(
+                    self.session_group_name,
+                    self.channel_name
+                )
+            except Exception as e:
+                logger.error(f"Channel layer group_discard failed: {str(e)}")
         logger.info(f"WebSocket disconnected for session {self.session_id} with code {close_code}")
-    
+
+    @database_sync_to_async
+    def get_session_data(self):
+        """Get active session metadata without lazy FK access in async code."""
+        try:
+            session = AttendanceSession.objects.select_related('initiated_by').get(
+                id=UUID(self.session_id),
+                ended_at=None
+            )
+            return {
+                'id': str(session.id),
+                'initiated_by_id': session.initiated_by_id,
+            }
+        except AttendanceSession.DoesNotExist:
+            logger.error(f"Session not found: {self.session_id}")
+            return None
+        except Exception as e:
+            logger.error(f"Session lookup failed: {str(e)}")
+            return None
+
     @database_sync_to_async
     def get_session(self):
         """Get AttendanceSession, ensuring it's still active"""
