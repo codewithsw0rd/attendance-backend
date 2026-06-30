@@ -115,7 +115,10 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
 
             await self.send(json.dumps({
                 'type': 'frame_processed',
-                'newly_detected': detections,
+                'newly_detected': detections['newly_detected'],
+                'ml_status': detections.get('ml_status'),
+                'total_faces_detected': detections.get('total_faces_detected', 0),
+                'enrolled_embeddings': detections.get('enrolled_embeddings', 0),
                 'timestamp': timezone.now().isoformat()
             }))
         except Exception as e:
@@ -211,7 +214,12 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             
             if not stored_embeddings:
                 logger.warning(f"No enrolled students with registered faces for session {self.session_id}")
-                return []
+                return {
+                    'newly_detected': [],
+                    'ml_status': 'no_enrolled_faces',
+                    'total_faces_detected': 0,
+                    'enrolled_embeddings': 0,
+                }
             
             # ─── Call ML service for multi-face detection ──────────────
             try:
@@ -277,7 +285,12 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                         logger.error(f"Error creating attendance: {str(e)}")
                         pass
             
-            return newly_detected
+            return {
+                'newly_detected': newly_detected,
+                'ml_status': ml_result.get('status'),
+                'total_faces_detected': ml_result.get('total_faces_detected', 0),
+                'enrolled_embeddings': len(stored_embeddings),
+            }
             
         except Exception as e:
             logger.error(f"Frame processing error: {str(e)}")

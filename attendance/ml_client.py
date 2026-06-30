@@ -4,8 +4,9 @@ Handles communication with the FastAPI ML service for face recognition tasks.
 """
 import requests
 import json
+from io import BytesIO
 from django.conf import settings
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 # ML Service configuration
 ML_SERVICE_URL = getattr(settings, 'ML_SERVICE_URL', 'http://localhost:8000')
@@ -17,6 +18,15 @@ ML_CONTINUOUS_DETECTION_ENDPOINT = f'{ML_SERVICE_URL}/continuous-detection'
 class MLServiceError(Exception):
     """Custom exception for ML service errors"""
     pass
+
+
+def _prepare_image_upload(image_file) -> Union[BytesIO, tuple]:
+    """Ensure file-like image payloads are rewound and sent as multipart JPEG."""
+    if hasattr(image_file, 'seek'):
+        image_file.seek(0)
+    if isinstance(image_file, BytesIO):
+        return ('frame.jpg', image_file, 'image/jpeg')
+    return image_file
 
 
 def register_face_embedding(image_file) -> Tuple[List[float], float]:
@@ -80,7 +90,7 @@ def process_attendance(
         MLServiceError: If ML service fails to process attendance
     """
     try:
-        files = {'image': image_file}
+        files = {'image': _prepare_image_upload(image_file)}
         data = {
             'session_id': session_id,
             'stored_vectors': json.dumps(stored_embeddings),
@@ -158,7 +168,7 @@ def process_continuous_detection(
         MLServiceError: If ML service fails to process frame
     """
     try:
-        files = {'image': image_file}
+        files = {'image': _prepare_image_upload(image_file)}
         data = {
             'session_id': session_id,
             'stored_vectors': json.dumps(stored_embeddings),
