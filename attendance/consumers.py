@@ -18,6 +18,10 @@ from academics.models import ClassSession
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of frames to wait before refreshing the embedding cache.
+# Handles the edge case where a student enrolls mid-session.
+_CACHE_REFRESH_INTERVAL = 300
+
 
 class AttendanceStreamConsumer(AsyncWebsocketConsumer):
     """
@@ -63,8 +67,16 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             await self.close(code=1011)
             return
 
+        # ── Per-session embedding cache ────────────────────────────────────
+        # Fetched once here and refreshed every _CACHE_REFRESH_INTERVAL frames
+        # instead of being re-queried and re-serialised on every video frame.
+        self._embeddings_cache: list[list[float]] = []
+        self._student_ids_cache: list[str] = []
+        self._cache_frame_count: int = 0
+        await self._refresh_embedding_cache()
+
         await self.accept()
-        
+
         logger.info(f"WebSocket connected for session {self.session_id}")
         await self.send(json.dumps({
             'type': 'connection_established',
@@ -162,6 +174,52 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             return None
 
     @database_sync_to_async
+    def _load_embeddings(self):
+        """
+        Batch-fetch all enrolled students' embeddings for this session's subject
+        in exactly TWO DB queries (one for enrollments, one for embeddings via
+        prefetch_related) instead of one query per student.
+        """
+        try:
+            session = AttendanceSession.objects.select_related(
+                'class_session__subject'
+            ).get(id=UUID(self.session_id), ended_at=None)
+        except AttendanceSession.DoesNotExist:
+            return [], []
+
+        # Single query: all enrolled FaceData objects with their embeddings.
+        face_data_qs = (
+            FaceData.objects
+            .filter(
+                student__enrollments__subject=session.class_session.subject,
+                is_enrolled=True,
+            )
+            .select_related('student__user')
+            .prefetch_related('embeddings')
+        )
+
+        stored_embeddings: list[list[float]] = []
+        student_ids: list[str] = []
+
+        for face_data in face_data_qs:
+            for emb in face_data.embeddings.all():
+                stored_embeddings.append(emb.embedding)
+                student_ids.append(str(face_data.student.user.id))
+
+        return stored_embeddings, student_ids
+
+    async def _refresh_embedding_cache(self):
+        """Reload the embedding cache from the database."""
+        embeddings, student_ids = await self._load_embeddings()
+        self._embeddings_cache = embeddings
+        self._student_ids_cache = student_ids
+        self._cache_frame_count = 0
+        logger.debug(
+            f"Embedding cache refreshed for session {self.session_id}: "
+            f"{len(embeddings)} vectors across {len(set(student_ids))} students"
+        )
+
+    @database_sync_to_async
     def get_session(self):
         """Get AttendanceSession, ensuring it's still active"""
         try:
@@ -173,130 +231,132 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             logger.error(f"Session not found: {str(e)}")
             return None
     
-    @database_sync_to_async
-    def process_frame(self, frame_io):
+    async def process_frame(self, frame_io):
         """
         Process a single video frame:
-        1. Get all enrolled students' embeddings
+        1. Use cached embeddings (refreshed periodically)
         2. Call ML service for multi-face detection
         3. Deduplicate: only create Attendance if not already marked
         4. Return newly detected students
         """
-        try:
-            session = AttendanceSession.objects.get(
-                id=UUID(self.session_id),
-                ended_at=None
-            )
-            class_session = session.class_session
-            
-            # ─── Get all enrolled students' embeddings ────────────────
-            enrolled = Enrollment.objects.filter(
-                subject=class_session.subject
-            ).select_related('student', 'student__user')
-            
-            stored_embeddings = []
-            student_ids = []
-            
-            for enrollment in enrolled:
-                try:
-                    face_data = FaceData.objects.get(
-                        student=enrollment.student,
-                        is_enrolled=True
-                    )
-                    embeddings = FaceEmbedding.objects.filter(
-                        face_data=face_data
-                    ).order_by('photo_number')
-                    
-                    for emb in embeddings:
-                        stored_embeddings.append(emb.embedding)
-                        student_ids.append(str(enrollment.student.user.id))
-                except FaceData.DoesNotExist:
-                    # Skip students without completed enrollment
-                    pass
-            
-            if not stored_embeddings:
-                logger.warning(f"No enrolled students with registered faces for session {self.session_id}")
-                return {
-                    'newly_detected': [],
-                    'ml_status': 'no_enrolled_faces',
-                    'total_faces_detected': 0,
-                    'enrolled_embeddings': 0,
-                    'faces': [],
-                }
-            
-            # ─── Call ML service for multi-face detection ──────────────
-            try:
-                ml_result = process_continuous_detection(
-                    frame_io,
-                    stored_embeddings,
-                    student_ids,
-                    session_id=str(session.id)
-                )
-            except MLServiceError as e:
-                logger.error(f"ML Service error: {str(e)}")
-                raise Exception(f"ML Service Error: {str(e)}")
-            
-            # ─── Process detections and deduplicate ────────────────────
-            newly_detected = []
-            marked_student_ids = session.marked_students if session.marked_students else []
-            
-            for detection in ml_result.get('detections', []):
-                student_id = detection.get('student_id')
-                confidence = detection.get('confidence', 0.0)
-                distance = detection.get('distance', 0.0)
-                
-                # Check if student already marked in this session
-                if student_id and student_id not in marked_student_ids:
-                    try:
-                        # Get the enrollment to create attendance
-                        enrollment = Enrollment.objects.get(
-                            subject=class_session.subject,
-                            student__user__id=UUID(student_id)
-                        )
-                        
-                        # Create attendance record
-                        Attendance.objects.create(
-                            student=enrollment.student,
-                            class_session=class_session,
-                            attendance_session=session,
-                            status='PRESENT',
-                            frame_detected=timezone.now(),
-                            detection_confidence=confidence
-                        )
-                        
-                        # Add to session's marked list
-                        marked_student_ids.append(student_id)
-                        session.marked_students = marked_student_ids
-                        session.save()
-                        
-                        # Prepare response for WebSocket clients
-                        newly_detected.append({
-                            'student_id': student_id,
-                            'student_email': enrollment.student.user.email,
-                            'student_name': f"{enrollment.student.first_name or ''} {enrollment.student.last_name or ''}".strip(),
-                            'student_roll_number': enrollment.student.roll_number,
-                            'confidence': round(confidence, 4),
-                            'distance': round(distance, 6),
-                            'marked_at': timezone.now().isoformat()
-                        })
-                        
-                        logger.info(f"Student {student_id} marked present in session {self.session_id}")
-                    except Enrollment.DoesNotExist:
-                        logger.warning(f"Enrollment not found for student {student_id}")
-                        pass
-                    except Exception as e:
-                        logger.error(f"Error creating attendance: {str(e)}")
-                        pass
-            
+        # ─── Periodic cache refresh ───────────────────────────────────────
+        self._cache_frame_count += 1
+        if self._cache_frame_count >= _CACHE_REFRESH_INTERVAL:
+            await self._refresh_embedding_cache()
+
+        stored_embeddings = self._embeddings_cache
+        student_ids = self._student_ids_cache
+
+        if not stored_embeddings:
+            logger.warning(f"No enrolled students with registered faces for session {self.session_id}")
             return {
-                'newly_detected': newly_detected,
-                'ml_status': ml_result.get('status'),
-                'total_faces_detected': ml_result.get('total_faces_detected', 0),
-                'enrolled_embeddings': len(stored_embeddings),
-                'nearest_distance': ml_result.get('nearest_distance'),
-                'faces': ml_result.get('faces', []),
+                'newly_detected': [],
+                'ml_status': 'no_enrolled_faces',
+                'total_faces_detected': 0,
+                'enrolled_embeddings': 0,
+                'faces': [],
             }
+
+        try:
+            session = await database_sync_to_async(
+                AttendanceSession.objects.select_related('class_session').get
+            )(id=UUID(self.session_id), ended_at=None)
+        except AttendanceSession.DoesNotExist:
+            logger.error(f"Session {self.session_id} not found or already ended")
+            raise Exception("Session not found or already ended")
             
-        except Exception as e:
-            logger.error(f"Frame processing error: {str(e)}")
-            raise
+        # ─── Call ML service for multi-face detection ──────────────────
+        try:
+            ml_result = await database_sync_to_async(process_continuous_detection)(
+                frame_io,
+                stored_embeddings,
+                student_ids,
+                session_id=str(session.id)
+            )
+        except MLServiceError as e:
+            logger.error(f"ML Service error: {str(e)}")
+            raise Exception(f"ML Service Error: {str(e)}")
+
+        # ─── Process detections and deduplicate ────────────────────────
+        newly_detected = []
+
+        for detection in ml_result.get('detections', []):
+            student_id = detection.get('student_id')
+            confidence = detection.get('confidence', 0.0)
+            distance = detection.get('distance', 0.0)
+
+            if not student_id:
+                continue
+
+            # Use get_or_create guarded by the UniqueConstraint — avoids the
+            # race condition of checking marked_students in memory.
+            result = await database_sync_to_async(self._mark_student_present)(
+                session, student_id, confidence
+            )
+            if result:
+                newly_detected.append({
+                    **result,
+                    'confidence': round(confidence, 4),
+                    'distance': round(distance, 6),
+                    'marked_at': timezone.now().isoformat()
+                })
+                # Refresh cache so the newly-marked student is included
+                # in session.marked_students on future frames.
+                await self._refresh_embedding_cache()
+
+        return {
+            'newly_detected': newly_detected,
+            'ml_status': ml_result.get('status'),
+            'total_faces_detected': ml_result.get('total_faces_detected', 0),
+            'enrolled_embeddings': len(stored_embeddings),
+            'nearest_distance': ml_result.get('nearest_distance'),
+            'faces': ml_result.get('faces', []),
+        }
+
+    def _mark_student_present(self, session, student_id: str, confidence: float) -> dict | None:
+        """
+        Atomically create an Attendance record for the student if not already marked.
+        Returns student info dict on first mark, None if already marked this session.
+        Uses DB-level get_or_create to be race-condition-safe.
+        """
+        try:
+            enrollment = Enrollment.objects.select_related(
+                'student__user'
+            ).get(
+                subject=session.class_session.subject,
+                student__user__id=UUID(student_id)
+            )
+        except Enrollment.DoesNotExist:
+            logger.warning(f"Enrollment not found for student {student_id}")
+            return None
+
+        attendance, created = Attendance.objects.get_or_create(
+            student=enrollment.student,
+            attendance_session=session,
+            defaults={
+                'class_session': session.class_session,
+                'status': 'PRESENT',
+                'frame_detected': timezone.now(),
+                'detection_confidence': confidence,
+            }
+        )
+
+        if not created:
+            # Already marked in a previous frame
+            return None
+
+        # Keep marked_students in sync (best-effort, informational only —
+        # the UniqueConstraint is the real guard against duplicates).
+        marked = list(session.marked_students or [])
+        if student_id not in marked:
+            marked.append(student_id)
+            AttendanceSession.objects.filter(pk=session.pk).update(marked_students=marked)
+
+        logger.info(f"Student {student_id} marked present in session {self.session_id}")
+        student = enrollment.student
+        return {
+            'student_id': student_id,
+            'student_email': student.user.email,
+            'student_name': f"{student.first_name or ''} {student.last_name or ''}".strip(),
+            'student_roll_number': student.roll_number,
+        }

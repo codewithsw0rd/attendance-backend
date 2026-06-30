@@ -127,7 +127,7 @@ def check_ml_service_health() -> bool:
             timeout=5
         )
         return response.status_code == 200
-    except:
+    except requests.exceptions.RequestException:
         return False
 
 def process_continuous_detection(
