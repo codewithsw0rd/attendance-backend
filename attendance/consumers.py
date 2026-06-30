@@ -5,6 +5,7 @@ Handles continuous frame processing and face detection.
 import json
 import logging
 from io import BytesIO
+import base64
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
@@ -58,16 +59,46 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             'message': 'Ready to receive frames'
         }))
     
-    async def receive(self, bytes_data=None):
-        """Receive and process video frame"""
-        if not bytes_data:
-            return
+    async def receive(self, text_data=None, bytes_data=None):
+        """Receive and process video frame
         
+        Supports:
+        - Binary frames (raw JPEG/PNG bytes)
+        - JSON text frames: {"type": "frame", "data": "<data-url or base64>"}
+        """
         try:
-            # Frame received as binary; process it
-            frame_io = BytesIO(bytes_data)
+            frame_io = None
+
+            if text_data:
+                try:
+                    message = json.loads(text_data)
+                    if message.get('type') != 'frame' or 'data' not in message:
+                        return
+                    data_url = message['data']
+                    # Strip 'data:image/jpeg;base64,' prefix if present
+                    if isinstance(data_url, str) and ',' in data_url:
+                        _, b64_data = data_url.split(',', 1)
+                    else:
+                        b64_data = data_url
+                    frame_bytes = base64.b64decode(b64_data)
+                    frame_io = BytesIO(frame_bytes)
+                except Exception as e:
+                    logger.error(f"Error decoding text frame: {str(e)}")
+                    await self.send(json.dumps({
+                        'type': 'error',
+                        'detail': 'Invalid frame payload'
+                    }))
+                    return
+
+            elif bytes_data:
+                # Frame received as binary; process it directly
+                frame_io = BytesIO(bytes_data)
+
+            if frame_io is None:
+                return
+
             detections = await self.process_frame(frame_io)
-            
+
             await self.send(json.dumps({
                 'type': 'frame_processed',
                 'newly_detected': detections,
@@ -187,13 +218,15 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                         session.marked_students = marked_student_ids
                         session.save()
                         
-                        # Prepare response
+                        # Prepare response for WebSocket clients
                         newly_detected.append({
                             'student_id': student_id,
                             'student_email': enrollment.student.user.email,
+                            'student_name': f"{enrollment.student.first_name or ''} {enrollment.student.last_name or ''}".strip(),
+                            'student_roll_number': enrollment.student.roll_number,
                             'confidence': round(confidence, 4),
                             'distance': round(distance, 6),
-                            'detected_at': timezone.now().isoformat()
+                            'marked_at': timezone.now().isoformat()
                         })
                         
                         logger.info(f"Student {student_id} marked present in session {self.session_id}")
