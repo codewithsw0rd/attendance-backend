@@ -108,7 +108,23 @@ class StudentViewSet(ModelViewSet):
                 try:
                     # Call ML service to extract embedding and quality score
                     embedding, quality_score = register_face_embedding(image_file)
-                    
+
+                    # Reject low-quality photos before storing — a bad embedding
+                    # at enrollment causes poor matching for the lifetime of the account.
+                    MIN_QUALITY = 0.35
+                    if quality_score < MIN_QUALITY:
+                        return Response(
+                            {
+                                'error': (
+                                    f'Photo {photo_number} quality is too low '
+                                    f'(score: {round(quality_score, 2)}, minimum: {MIN_QUALITY}). '
+                                    'Please retake in better lighting with your face clearly visible '
+                                    'and centred in the frame.'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                     # Create FaceEmbedding record
                     FaceEmbedding.objects.create(
                         face_data=face_data,
@@ -116,7 +132,7 @@ class StudentViewSet(ModelViewSet):
                         photo_number=photo_number,
                         quality_score=quality_score
                     )
-                    
+
                 except MLServiceError as e:
                     return Response(
                         {'error': f'Failed to process image {photo_number}: {str(e)}'},

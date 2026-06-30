@@ -207,25 +207,25 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Get all enrolled students' face embeddings in this subject
-        enrolled_students = Enrollment.objects.filter(
-            subject=class_session.subject
-        ).select_related('student')
-        
+        # Get all enrolled students' face embeddings in this subject — batch fetch
+        # to avoid one DB query per student (N+1 problem).
+        face_data_qs = (
+            FaceData.objects
+            .filter(
+                student__enrollments__subject=class_session.subject,
+                is_enrolled=True,
+            )
+            .select_related('student__user')
+            .prefetch_related('embeddings')
+        )
+
         stored_embeddings = []
         student_ids = []
-        
-        for enrollment in enrolled_students:
-            try:
-                face_data = FaceData.objects.get(student=enrollment.student, is_enrolled=True)
-                # Get all photo embeddings for this student
-                embeddings = FaceEmbedding.objects.filter(face_data=face_data).order_by('photo_number')
-                for embedding_record in embeddings:
-                    stored_embeddings.append(embedding_record.embedding)
-                    student_ids.append(str(enrollment.student.user.id))
-            except FaceData.DoesNotExist:
-                # Skip students who haven't completed registration
-                pass
+
+        for face_data in face_data_qs:
+            for embedding_record in face_data.embeddings.all():
+                stored_embeddings.append(embedding_record.embedding)
+                student_ids.append(str(face_data.student.user.id))
         
         if not stored_embeddings:
             return Response(
@@ -280,8 +280,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         # Determine if attendance is suspicious
         is_suspicious = (
             ml_status != 'identified' or  # Face not recognized
-            confidence < 0.3 or  # Low confidence match
-            distance > 0.55  # High distance from stored embedding
+            confidence < 0.3 or           # Low confidence match
+            distance > 0.68               # High distance (above continuous detection threshold)
         )
         
         # Create AttendanceLog for verification layer
