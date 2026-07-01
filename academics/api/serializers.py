@@ -5,6 +5,14 @@ class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
         fields = '__all__' 
+
+class SubjectReadSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='teacher.user.get_full_name', read_only=True)
+    teacher_email = serializers.EmailField(source='teacher.user.email', read_only=True)
+    
+    class Meta:
+        model = Subject
+        fields = ['id', 'name', 'code', 'department', 'semester', 'teacher', 'teacher_name', 'teacher_email', 'created_at', 'updated_at']
         
 class EnrollmentSerializer(serializers.ModelSerializer):
     class Meta:
