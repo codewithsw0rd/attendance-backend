@@ -632,12 +632,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         if status_filter and status_filter in ['PRESENT', 'ABSENT']:
             queryset = queryset.filter(status=status_filter)
         
-        # Apply search filter (student name or roll number)
+        # Apply search filter (class session name)
         if search_query:
             queryset = queryset.filter(
-                Q(student__user__first_name__icontains=search_query) |
-                Q(student__user__last_name__icontains=search_query) |
-                Q(student__roll_number__icontains=search_query)
+                Q(class_session__class_name__icontains=search_query)
             )
         
         # Group by session and date
@@ -652,23 +650,27 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             if key not in seen_keys:
                 seen_keys.add(key)
                 
-                # Count for this session/date
+                # Get total enrolled students in this class
+                total_enrolled = Enrollment.objects.filter(
+                    subject=attendance.class_session.subject
+                ).count()
+                
+                # Count attendance for this session/date
                 session_attendances = queryset.filter(
                     class_session=attendance.class_session,
                     marked_at__date=date
                 )
                 
-                total = session_attendances.count()
                 present = session_attendances.filter(status='PRESENT').count()
                 absent = session_attendances.filter(status='ABSENT').count()
-                rate = (present / total * 100) if total > 0 else 0
+                rate = (present / total_enrolled * 100) if total_enrolled > 0 else 0
                 
                 reports_data.append({
                     'session_id': session_id,
                     'class_name': attendance.class_session.class_name,
                     'subject_code': attendance.class_session.subject.code,
                     'date': date,
-                    'total': total,
+                    'total': total_enrolled,
                     'present': present,
                     'absent': absent,
                     'attendance_rate': round(rate, 2)
