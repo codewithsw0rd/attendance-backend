@@ -15,7 +15,7 @@ from attendance.ml_client import process_continuous_detection, MLServiceError
 
 logger = logging.getLogger(__name__)
 
-_CACHE_REFRESH_INTERVAL = 300
+_CACHE_REFRESH_INTERVAL = 30
 _PROCESSING_TIMEOUT = 12.0
 
 
