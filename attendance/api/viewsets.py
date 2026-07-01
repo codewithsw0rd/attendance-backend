@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from django.http import HttpResponse
 from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
 from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog, AttendanceSession
@@ -20,6 +21,8 @@ from ..ml_client import process_attendance, MLServiceError
 from django.utils import timezone
 import json
 from drf_spectacular.utils import extend_schema
+from django.db.models import Count, Q
+from datetime import datetime
 
 
 class FaceDataViewSet(viewsets.ModelViewSet):
@@ -563,6 +566,328 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             'ended_at': session.ended_at.isoformat()
         }, status=status.HTTP_200_OK)
 
+    @extend_schema(
+        responses={200: serializers.Serializer()}
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def reports(self, request):
+        """
+        Get attendance reports with session-level statistics.
+        
+        Query Parameters:
+            - start_date: YYYY-MM-DD (optional)
+            - end_date: YYYY-MM-DD (optional)
+            - status: PRESENT|ABSENT (optional)
+            - search: Student name/roll number (optional)
+            - sort_by: date|class|rate|present (default: date)
+            - sort_order: asc|desc (default: desc)
+            - page: Page number (default: 1)
+            - page_size: Items per page (default: 10)
+        
+        Returns: Paginated sessions with attendance statistics
+        """
+        if request.user.user_type != UserType.TEACHER:
+            return Response(
+                {'detail': 'Only teachers can access reports'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get query parameters
+        start_date_str = request.query_params.get('start_date')
+        end_date_str = request.query_params.get('end_date')
+        status_filter = request.query_params.get('status')
+        search_query = request.query_params.get('search', '').strip()
+        sort_by = request.query_params.get('sort_by', 'date')
+        sort_order = request.query_params.get('sort_order', 'desc')
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 10))
+        
+        # Build queryset
+        queryset = Attendance.objects.filter(
+            class_session__subject__teacher__user=request.user
+        ).select_related('class_session', 'class_session__subject', 'student', 'student__user')
+        
+        # Apply date filters
+        if start_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                queryset = queryset.filter(marked_at__date__gte=start_date)
+            except ValueError:
+                return Response(
+                    {'detail': 'Invalid start_date format. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        if end_date_str:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                queryset = queryset.filter(marked_at__date__lte=end_date)
+            except ValueError:
+                return Response(
+                    {'detail': 'Invalid end_date format. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Apply status filter
+        if status_filter and status_filter in ['PRESENT', 'ABSENT']:
+            queryset = queryset.filter(status=status_filter)
+        
+        # Apply search filter (student name or roll number)
+        if search_query:
+            queryset = queryset.filter(
+                Q(student__user__first_name__icontains=search_query) |
+                Q(student__user__last_name__icontains=search_query) |
+                Q(student__roll_number__icontains=search_query)
+            )
+        
+        # Group by session and date
+        reports_data = []
+        seen_keys = set()
+        
+        for attendance in queryset.order_by('-marked_at'):
+            session_id = str(attendance.class_session.id)
+            date = attendance.marked_at.date().isoformat()
+            key = f"{session_id}-{date}"
+            
+            if key not in seen_keys:
+                seen_keys.add(key)
+                
+                # Count for this session/date
+                session_attendances = queryset.filter(
+                    class_session=attendance.class_session,
+                    marked_at__date=date
+                )
+                
+                total = session_attendances.count()
+                present = session_attendances.filter(status='PRESENT').count()
+                absent = session_attendances.filter(status='ABSENT').count()
+                rate = (present / total * 100) if total > 0 else 0
+                
+                reports_data.append({
+                    'session_id': session_id,
+                    'class_name': attendance.class_session.class_name,
+                    'subject_code': attendance.class_session.subject.code,
+                    'date': date,
+                    'total': total,
+                    'present': present,
+                    'absent': absent,
+                    'attendance_rate': round(rate, 2)
+                })
+        
+        # Apply sorting
+        reverse_sort = sort_order.lower() == 'desc'
+        if sort_by == 'class':
+            reports_data.sort(key=lambda x: x['class_name'], reverse=reverse_sort)
+        elif sort_by == 'rate':
+            reports_data.sort(key=lambda x: x['attendance_rate'], reverse=reverse_sort)
+        elif sort_by == 'present':
+            reports_data.sort(key=lambda x: x['present'], reverse=reverse_sort)
+        else:  # date (default)
+            reports_data.sort(key=lambda x: x['date'], reverse=reverse_sort)
+        
+        # Calculate summary stats (from all filtered data, not paginated)
+        if reports_data:
+            avg_rate = sum(r['attendance_rate'] for r in reports_data) / len(reports_data)
+            best_rate = max(r['attendance_rate'] for r in reports_data)
+            worst_rate = min(r['attendance_rate'] for r in reports_data)
+            total_present = sum(r['present'] for r in reports_data)
+            total_absent = sum(r['absent'] for r in reports_data)
+        else:
+            avg_rate = best_rate = worst_rate = 0
+            total_present = total_absent = 0
+        
+        # Apply pagination
+        total_count = len(reports_data)
+        total_pages = (total_count + page_size - 1) // page_size
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_data = reports_data[start_idx:end_idx]
+        
+        return Response({
+            'summary': {
+                'total_sessions': total_count,
+                'average_rate': round(avg_rate, 2),
+                'best_rate': round(best_rate, 2),
+                'worst_rate': round(worst_rate, 2),
+                'total_present': total_present,
+                'total_absent': total_absent,
+            },
+            'pagination': {
+                'current_page': page,
+                'page_size': page_size,
+                'total_count': total_count,
+                'total_pages': total_pages,
+            },
+            'sessions': paginated_data
+        })
+
+    @extend_schema(
+        responses={200: serializers.Serializer()}
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def export_excel(self, request):
+        """
+        Export attendance records as Excel file.
+        
+        Query Parameters (same as reports endpoint):
+            - start_date: YYYY-MM-DD (optional)
+            - end_date: YYYY-MM-DD (optional)
+            - status: PRESENT|ABSENT (optional)
+            - search: Student name/roll number (optional)
+        
+        Returns: Excel file download
+        """
+        if request.user.user_type != UserType.TEACHER:
+            return Response(
+                {'detail': 'Only teachers can export reports'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get query parameters
+        start_date_str = request.query_params.get('start_date')
+        end_date_str = request.query_params.get('end_date')
+        status_filter = request.query_params.get('status')
+        search_query = request.query_params.get('search', '').strip()
+        
+        # Build queryset
+        queryset = Attendance.objects.filter(
+            class_session__subject__teacher__user=request.user
+        ).select_related(
+            'class_session', 'class_session__subject',
+            'student', 'student__user',
+            'verification_log'
+        ).order_by('-marked_at')
+        
+        # Apply date filters
+        if start_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                queryset = queryset.filter(marked_at__date__gte=start_date)
+            except ValueError:
+                return Response(
+                    {'detail': 'Invalid start_date format. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        if end_date_str:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                queryset = queryset.filter(marked_at__date__lte=end_date)
+            except ValueError:
+                return Response(
+                    {'detail': 'Invalid end_date format. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Apply status filter
+        if status_filter and status_filter in ['PRESENT', 'ABSENT']:
+            queryset = queryset.filter(status=status_filter)
+        
+        # Apply search filter
+        if search_query:
+            queryset = queryset.filter(
+                Q(student__user__first_name__icontains=search_query) |
+                Q(student__user__last_name__icontains=search_query) |
+                Q(student__roll_number__icontains=search_query)
+            )
+        
+        # Generate Excel
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from io import BytesIO
+            from django.http import HttpResponse
+            
+            # Create workbook
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Attendance Report"
+            
+            # Define styles
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF")
+            border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            center_alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Write headers
+            headers = ['Date', 'Time', 'Class', 'Subject Code', 'Student Name', 'Roll Number', 'Status', 'Confidence %', 'Liveness', 'Location Distance (m)']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col)
+                cell.value = header
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_alignment
+                cell.border = border
+            
+            # Write data rows
+            for row_idx, attendance in enumerate(queryset, 2):
+                confidence = ''
+                if attendance.verification_log:
+                    confidence = round(attendance.verification_log.face_confidence * 100, 1)
+                
+                liveness = 'N/A'
+                if attendance.verification_log:
+                    liveness = attendance.verification_log.liveness_passed
+                
+                distance = ''
+                if attendance.verification_log and attendance.verification_log.distance_from_classroom:
+                    distance = round(attendance.verification_log.distance_from_classroom, 1)
+                
+                row_data = [
+                    attendance.marked_at.date().isoformat(),
+                    attendance.marked_at.time().strftime('%H:%M:%S'),
+                    attendance.class_session.class_name,
+                    attendance.class_session.subject.code,
+                    f"{attendance.student.user.first_name} {attendance.student.user.last_name}",
+                    attendance.student.roll_number,
+                    attendance.status,
+                    confidence,
+                    liveness,
+                    distance,
+                ]
+                
+                for col, value in enumerate(row_data, 1):
+                    cell = ws.cell(row=row_idx, column=col)
+                    cell.value = value
+                    cell.border = border
+                    if col in [7, 8, 9, 10]:  # Numeric columns
+                        cell.alignment = center_alignment
+            
+            # Adjust column widths
+            ws.column_dimensions['A'].width = 12
+            ws.column_dimensions['B'].width = 12
+            ws.column_dimensions['C'].width = 20
+            ws.column_dimensions['D'].width = 14
+            ws.column_dimensions['E'].width = 20
+            ws.column_dimensions['F'].width = 14
+            ws.column_dimensions['G'].width = 12
+            ws.column_dimensions['H'].width = 14
+            ws.column_dimensions['I'].width = 14
+            ws.column_dimensions['J'].width = 18
+            
+            # Save to BytesIO
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+            
+            # Return as attachment
+            response = HttpResponse(
+                output.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = f'attachment; filename="attendance_report_{timezone.now().date()}.xlsx"'
+            return response
+            
+        except ImportError:
+            return Response(
+                {'detail': 'openpyxl library not installed. Please install it to export to Excel.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @extend_schema(
     responses={200: serializers.Serializer()},
