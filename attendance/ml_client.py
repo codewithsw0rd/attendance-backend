@@ -4,9 +4,12 @@ Handles communication with the FastAPI ML service for face recognition tasks.
 """
 import requests
 import json
+import logging
 from io import BytesIO
 from django.conf import settings
 from typing import List, Tuple, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 # ML Service configuration
 ML_SERVICE_URL = getattr(settings, 'ML_SERVICE_URL', 'http://localhost:8000')
@@ -44,6 +47,7 @@ def register_face_embedding(image_file) -> Tuple[List[float], float]:
         MLServiceError: If ML service fails to extract embedding
     """
     try:
+        logger.info(f"Calling ML service: {ML_REGISTER_ENDPOINT}")
         files = {'image': image_file}
         response = requests.post(
             ML_REGISTER_ENDPOINT,
@@ -52,7 +56,12 @@ def register_face_embedding(image_file) -> Tuple[List[float], float]:
         )
         
         if response.status_code != 200:
-            error_detail = response.json().get('detail', 'Unknown error')
+            try:
+                error_detail = response.json().get('detail', 'Unknown error')
+            except (ValueError, AttributeError, json.JSONDecodeError):
+                # Response body is empty or not JSON
+                error_detail = f"HTTP {response.status_code}: {response.text[:200] if response.text else 'Empty response'}"
+                logger.error(f"ML Service error response: {error_detail}")
             raise MLServiceError(f"ML Service Error: {error_detail}")
         
         data = response.json()
@@ -64,6 +73,10 @@ def register_face_embedding(image_file) -> Tuple[List[float], float]:
         
         return embedding, quality_score
     
+    except requests.exceptions.Timeout:
+        raise MLServiceError(f"ML Service timeout at {ML_REGISTER_ENDPOINT} (taking >30s)")
+    except requests.exceptions.ConnectionError:
+        raise MLServiceError(f"Cannot connect to ML Service at {ML_REGISTER_ENDPOINT} - is it running?")
     except requests.exceptions.RequestException as e:
         raise MLServiceError(f"Failed to connect to ML service: {str(e)}")
 
@@ -90,6 +103,7 @@ def process_attendance(
         MLServiceError: If ML service fails to process attendance
     """
     try:
+        logger.info(f"Calling ML service: {ML_ATTENDANCE_ENDPOINT}")
         files = {'image': _prepare_image_upload(image_file)}
         data = {
             'session_id': session_id,
@@ -105,11 +119,19 @@ def process_attendance(
         )
         
         if response.status_code != 200:
-            error_detail = response.json().get('detail', 'Unknown error')
+            try:
+                error_detail = response.json().get('detail', 'Unknown error')
+            except (ValueError, AttributeError, json.JSONDecodeError):
+                error_detail = f"HTTP {response.status_code}: {response.text[:200] if response.text else 'Empty response'}"
+                logger.error(f"ML Service error response: {error_detail}")
             raise MLServiceError(f"ML Service Error: {error_detail}")
         
         return response.json()
     
+    except requests.exceptions.Timeout:
+        raise MLServiceError(f"ML Service timeout at {ML_ATTENDANCE_ENDPOINT} (taking >30s)")
+    except requests.exceptions.ConnectionError:
+        raise MLServiceError(f"Cannot connect to ML Service at {ML_ATTENDANCE_ENDPOINT} - is it running?")
     except requests.exceptions.RequestException as e:
         raise MLServiceError(f"Failed to connect to ML service: {str(e)}")
 
@@ -183,10 +205,18 @@ def process_continuous_detection(
         )
         
         if response.status_code != 200:
-            error_detail = response.json().get('detail', 'Unknown error')
+            try:
+                error_detail = response.json().get('detail', 'Unknown error')
+            except (ValueError, AttributeError, json.JSONDecodeError):
+                error_detail = f"HTTP {response.status_code}: {response.text[:200] if response.text else 'Empty response'}"
+                logger.error(f"ML Service error response: {error_detail}")
             raise MLServiceError(f"ML Service Error: {error_detail}")
         
         return response.json()
     
+    except requests.exceptions.Timeout:
+        raise MLServiceError(f"ML Service timeout at {ML_CONTINUOUS_DETECTION_ENDPOINT} (taking >30s)")
+    except requests.exceptions.ConnectionError:
+        raise MLServiceError(f"Cannot connect to ML Service at {ML_CONTINUOUS_DETECTION_ENDPOINT} - is it running?")
     except requests.exceptions.RequestException as e:
         raise MLServiceError(f"Failed to connect to ML service: {str(e)}")
