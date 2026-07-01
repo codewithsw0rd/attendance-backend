@@ -22,9 +22,16 @@ logger = logging.getLogger(__name__)
 # Handles the edge case where a student enrolls mid-session.
 _CACHE_REFRESH_INTERVAL = 300
 
-# If the ML service (Render) takes longer than this many seconds, release the
-# processing lock so the stream doesn't freeze when the user re-enters frame.
-_PROCESSING_TIMEOUT = 12.0
+# If the ML service (Render) takes longer than this many seconds, abort and
+# immediately return empty detections so the stream recovers quickly when
+# processing is too slow (cold start, network lag, etc.).
+# Set to 8 seconds: Render cold start usually takes 5-8 seconds, we give it
+# a bit of buffer but not too much to avoid user frustration.
+_PROCESSING_TIMEOUT = 8.0
+
+# Number of times to retry a frame if it times out
+# (helps handle transient Render cold-starts)
+_MAX_RETRIES = 1
 
 
 class AttendanceStreamConsumer(AsyncWebsocketConsumer):
@@ -99,12 +106,11 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         - Binary frames (raw JPEG/PNG bytes)
         - JSON text frames: {"type": "frame", "data": "<data-url or base64>"}
 
-        Uses a boolean flag + asyncio.wait_for to prevent concurrent ML calls.
-        If the ML service (Render) takes longer than _PROCESSING_TIMEOUT seconds,
-        we abort the wait and send an empty-faces response so the stream recovers
-        immediately when the user re-enters the camera frame.
+        Uses a lock to prevent concurrent ML calls. If the ML service times out,
+        we immediately return empty detections so the stream doesn't freeze.
+        The next frame will be processed normally.
         """
-        # Drop frame if still processing — prevents queue buildup
+        # Drop frame if still processing previous frame — prevents queue buildup
         if self._frame_lock.locked():
             return
 
@@ -138,32 +144,50 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             if frame_io is None:
                 return
 
-            # Time-box the ML round-trip with wait_for.
-            # On timeout the lock is released by the finally clause below so
-            # the very next frame can be processed without delay.
-            async with self._frame_lock:
+            # Process frame with retry logic for timeouts
+            detections = None
+            retry_count = 0
+
+            while retry_count <= _MAX_RETRIES:
                 try:
-                    detections = await asyncio.wait_for(
-                        self.process_frame(frame_io),
-                        timeout=_PROCESSING_TIMEOUT
-                    )
+                    async with self._frame_lock:
+                        detections = await asyncio.wait_for(
+                            self.process_frame(frame_io),
+                            timeout=_PROCESSING_TIMEOUT
+                        )
+                    break  # Success, exit retry loop
                 except asyncio.TimeoutError:
-                    logger.warning(
-                        f"ML frame timed out after {_PROCESSING_TIMEOUT}s for "
-                        f"session {self.session_id} — resetting"
-                    )
-                    # Send empty faces so the frontend clears stale boxes
-                    await self.send(json.dumps({
-                        'type': 'frame_processed',
-                        'newly_detected': [],
-                        'ml_status': 'timeout',
-                        'total_faces_detected': 0,
-                        'enrolled_embeddings': len(self._embeddings_cache),
-                        'nearest_distance': None,
-                        'faces': [],
-                        'timestamp': timezone.now().isoformat()
-                    }))
-                    return
+                    retry_count += 1
+                    if retry_count <= _MAX_RETRIES:
+                        logger.warning(
+                            f"ML timeout (attempt {retry_count}/{_MAX_RETRIES + 1}) "
+                            f"for session {self.session_id}, retrying..."
+                        )
+                        # Reset stream position for retry
+                        frame_io.seek(0)
+                        # Brief delay before retry to let ML service recover
+                        await asyncio.sleep(0.5)
+                    else:
+                        logger.warning(
+                            f"ML frame timed out after {_MAX_RETRIES + 1} attempts "
+                            f"for session {self.session_id}"
+                        )
+                        # Send empty faces so the frontend continues smoothly
+                        # instead of showing stale boxes for 2 more seconds
+                        await self.send(json.dumps({
+                            'type': 'frame_processed',
+                            'newly_detected': [],
+                            'ml_status': 'timeout',
+                            'total_faces_detected': 0,
+                            'enrolled_embeddings': len(self._embeddings_cache),
+                            'nearest_distance': None,
+                            'faces': [],
+                            'timestamp': timezone.now().isoformat()
+                        }))
+                        return
+
+            if detections is None:
+                return
 
             await self.send(json.dumps({
                 'type': 'frame_processed',
