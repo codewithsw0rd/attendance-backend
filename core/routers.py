@@ -2,6 +2,7 @@ from rest_framework.routers import DefaultRouter
 from accounts.api.viewsets import *
 from academics.api.viewsets import *
 from attendance.api.viewsets import *
+from attendance.api.dashboard_viewsets import DashboardViewSet
 
 router = DefaultRouter()
 
@@ -19,3 +20,6 @@ router.register('class-sessions', ClassSessionViewSet, basename='class-sessions'
 router.register('face-data', FaceDataViewSet, basename='face-data')
 router.register('attendance', AttendanceViewSet, basename='attendance')
 router.register('attendance-logs', AttendanceLogViewSet, basename='attendance-logs')
+
+#-----------------------------------DASHBOARD-----------------------------------------------------
+router.register('dashboard', DashboardViewSet, basename='dashboard')
