@@ -303,9 +303,95 @@ class TeacherViewSet(ModelViewSet):
         'updated_at': 'updated_at',
     }
     
+    def get_serializer_class(self):
+        """Use read serializer for list/retrieve, write serializer for create/update"""
+        if self.action in ['list', 'retrieve']:
+            return TeacherProfileReadSerializer
+        return TeacherProfileSerializer
+    
     def list(self, request, *args, **kwargs):
         self.queryset = apply_sorting(request, self.get_queryset(), self)
         return super().list(request, *args, **kwargs)
+    
+    @action(detail=False, methods=['get'], url_path='export_excel')
+    def export_excel(self, request):
+        """
+        Export teachers to Excel file with filtering, searching, sorting support.
+        Query parameters:
+            - search: Search by email, employee_id, first_name, last_name
+            - department: Filter by department
+            - ordering: Sort field (e.g., 'first_name', '-created_at')
+        """
+        # Apply all the same filters/search/ordering as the list view
+        queryset = self.get_queryset()
+        
+        # Apply filters
+        filterset = self.filterset_class(request.GET, queryset=queryset)
+        queryset = filterset.qs
+        
+        # Apply search
+        search_query = request.query_params.get('search', '')
+        if search_query:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(user__email__icontains=search_query) |
+                Q(employee_id__icontains=search_query) |
+                Q(first_name__icontains=search_query) |
+                Q(last_name__icontains=search_query)
+            )
+        
+        # Apply ordering
+        ordering = request.query_params.get('ordering', 'employee_id')
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        
+        # Create Excel workbook
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Teachers"
+        
+        # Add headers
+        headers = ['Name', 'Email', 'Employee ID', 'Department', 'Status']
+        ws.append(headers)
+        
+        # Style header row
+        from openpyxl.styles import Font, PatternFill
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+        
+        # Add data rows
+        for teacher in queryset:
+            status_text = "Active" if teacher.user.is_active else "Inactive"
+            ws.append([
+                f"{teacher.first_name} {teacher.last_name}",
+                teacher.user.email,
+                teacher.employee_id,
+                teacher.department or "",
+                status_text,
+            ])
+        
+        # Adjust column widths
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 30
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 20
+        ws.column_dimensions['E'].width = 12
+        
+        # Save to BytesIO
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        # Return as file download
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="teachers_{__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
+        return response
     
     @extend_schema(
         request=TeacherCreationRequestSerializer,
