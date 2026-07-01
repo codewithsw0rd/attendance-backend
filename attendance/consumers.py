@@ -1,4 +1,4 @@
-"""WebSocket consumer for real-time attendance streaming."""
+"""WebSocket handler for real-time attendance."""
 import asyncio
 import json
 import logging
@@ -47,6 +47,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
 
         self._embeddings_cache: list[list[float]] = []
         self._student_ids_cache: list[str] = []
+        self._student_names_map: dict[str, str] = {}
         self._cache_frame_count: int = 0
         self._frame_lock = asyncio.Lock()
         
@@ -157,7 +158,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
                 ended_at=None
             )
         except AttendanceSession.DoesNotExist:
-            return [], []
+            return [], [], {}
 
         face_data_qs = (
             FaceData.objects
@@ -171,19 +172,25 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
 
         stored_embeddings: list[list[float]] = []
         student_ids: list[str] = []
+        student_names: dict[str, str] = {}
 
         for face_data in face_data_qs:
+            student_id = str(face_data.student.user.id)
+            student_name = f"{face_data.student.first_name or ''} {face_data.student.last_name or ''}".strip()
+            student_names[student_id] = student_name
+            
             for emb in face_data.embeddings.all():
                 stored_embeddings.append(emb.embedding)
-                student_ids.append(str(face_data.student.user.id))
+                student_ids.append(student_id)
 
-        return stored_embeddings, student_ids
+        return stored_embeddings, student_ids, student_names
 
     async def _refresh_embedding_cache(self):
         """Refresh embedding cache from database."""
-        embeddings, student_ids = await self._load_embeddings()
+        embeddings, student_ids, student_names = await self._load_embeddings()
         self._embeddings_cache = embeddings
         self._student_ids_cache = student_ids
+        self._student_names_map = student_names
         self._cache_frame_count = 0
         logger.debug(
             f"Cache refreshed for session {self.session_id}: "
@@ -213,17 +220,18 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         except AttendanceSession.DoesNotExist:
             logger.error(f"Session {self.session_id} not found")
             raise Exception("Session not found")
-            
-        try:
-            ml_result = await database_sync_to_async(process_continuous_detection)(
-                frame_io,
-                self._embeddings_cache,
-                self._student_ids_cache,
-                session_id=str(session.id)
-            )
-        except MLServiceError as e:
-            logger.error(f"ML error: {str(e)}")
-            raise Exception(f"ML Service Error: {str(e)}")
+
+        ml_result = await database_sync_to_async(process_continuous_detection)(
+            frame_io,
+            self._embeddings_cache,
+            self._student_ids_cache,
+            str(self.session_id)
+        )
+
+        # Add student names to face boxes
+        for face in ml_result.get('faces', []):
+            if face.get('student_id') and face['student_id'] in self._student_names_map:
+                face['student_name'] = self._student_names_map[face['student_id']]
 
         newly_detected = []
         for detection in ml_result.get('detections', []):
