@@ -13,6 +13,5 @@ services:
         sync: false
       - key: ML_SERVICE_URL
         value: https://heavily-regime-snowdrift.ngrok-free.dev
-        sync: false
       - key: SECRET_KEY
         sync: false
