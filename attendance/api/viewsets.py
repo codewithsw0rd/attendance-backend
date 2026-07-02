@@ -845,7 +845,6 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                         'class_name': f"{template.subject.code} - {template.get_day_of_week_display()}",
                         'start_time': template.start_time,
                         'end_time': template.end_time,
-                        'template': template,
                     }
                 )
                 
