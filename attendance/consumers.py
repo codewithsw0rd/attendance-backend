@@ -691,9 +691,11 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
         """Get list of groups for all enrolled classes."""
         try:
             from academics.models import ClassSession
+            from attendance.models import ClassSessionTemplate
             
             student = self.scope['user'].studentprofile
             today = timezone.now().date()
+            today_weekday = today.weekday()
             
             # Get enrolled subjects
             enrollments = Enrollment.objects.filter(
@@ -713,7 +715,31 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
                 group_name = f'session_students_{session.id}'
                 groups.append(group_name)
             
-            logger.debug(f"Found {len(groups)} enrolled class sessions for student {self.user_id}")
+            # ALSO JOIN: Groups for templates scheduled for today
+            # Proactively create ClassSession for templates to ensure the group exists
+            templates = ClassSessionTemplate.objects.filter(
+                subject_id__in=enrollments,
+                day_of_week=today_weekday,
+                is_active=True
+            )
+            
+            for template in templates:
+                # Create or get ClassSession for today based on template
+                class_session, created = ClassSession.objects.get_or_create(
+                    subject=template.subject,
+                    date=today,
+                    defaults={
+                        'class_name': f"{template.subject.code} - {template.get_day_of_week_display()}",
+                        'start_time': template.start_time,
+                        'end_time': template.end_time,
+                    }
+                )
+                
+                group_name = f'session_students_{class_session.id}'
+                if group_name not in groups:
+                    groups.append(group_name)
+            
+            logger.info(f"Student {self.user_id} joined {len(groups)} session groups")
             return groups
         except Exception as e:
             logger.error(f"Error getting enrolled class groups: {str(e)}")
@@ -735,6 +761,7 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
         }
         """
         try:
+            logger.info(f"✅ Consumer.session_started() called for student {self.user_id}")
             await self.send(json.dumps({
                 'type': 'session_started',
                 'session_id': event.get('session_id'),
@@ -745,7 +772,7 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
                 'message': f"🔴 {event.get('subject_code')} session started! Click to mark attendance.",
                 'timestamp': timezone.now().isoformat()
             }))
-            logger.debug(f"Sent session_started notification to {self.user_id}")
+            logger.info(f"✅ Sent session_started notification to student {self.user_id}")
         except Exception as e:
             logger.error(f"Error sending session_started notification: {str(e)}")
     

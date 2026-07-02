@@ -585,6 +585,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             for template in templates:
                 subject = template.subject
                 
+                import logging
+                logger = logging.getLogger(__name__)
+                
                 # Check if teacher has active session for this template today
                 # Use template_id (BigInt) directly to avoid UUID type mismatch
                 active_session = AttendanceSession.objects.filter(
@@ -592,6 +595,11 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     session_date=today,
                     ended_at__isnull=True
                 ).first()
+                
+                logger.info(f"📋 Template {template.id} ({template.subject.code}): "
+                           f"Active session = {'YES' if active_session else 'NO'}")
+                if active_session:
+                    logger.info(f"  → Session ID: {active_session.id}, Created: {active_session.created_at}")
                 
                 # Check if student already marked attendance for this template today
                 student_attendance = Attendance.objects.filter(
@@ -622,8 +630,15 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 else:
                     session_status = 'running'
                 
+                logger.info(f"  ⏰ Time check: now={now.strftime('%H:%M:%S')}, "
+                           f"class={template.start_time.strftime('%H:%M:%S')}-{template.end_time.strftime('%H:%M:%S')}, "
+                           f"status={session_status}")
+                
                 # can_mark_attendance = TRUE only if time window is 'running' AND teacher started session
                 can_mark_attendance = (session_status == 'running' and active_session is not None)
+                
+                logger.info(f"  ✓ Final: session_status={session_status}, "
+                           f"can_mark_attendance={can_mark_attendance}")
                 
                 classes_data.append({
                     'id': str(active_session.id) if active_session else str(template.id),  # Use AttendanceSession ID if active, else template ID

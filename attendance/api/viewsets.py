@@ -878,8 +878,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                     session_time=template.start_time,
                 )
                 
-                # Broadcast to all students enrolled in this subject
-                group_name = f'subject_students_{template.subject.id}'
+                # Broadcast to all students in today's class session (students already joined this group)
+                group_name = f'session_students_{class_session.id}'
                 
             else:
                 # Legacy: ClassSession-based session
@@ -917,21 +917,32 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         try:
             from channels.layers import get_channel_layer
             from asgiref.sync import async_to_sync
+            import logging
             
+            logger = logging.getLogger(__name__)
             channel_layer = get_channel_layer()
+            
+            message_data = {
+                'type': 'session.started',
+                'session_id': str(session.id),
+                'class_session_id': str(class_session.id),
+                'subject_code': class_session.subject.code,
+                'subject_name': class_session.subject.name,
+                'template_id': str(session.template.id) if session.template else None,
+            }
+            
+            logger.info(f"Broadcasting session_started to group '{group_name}': {message_data}")
+            
             async_to_sync(channel_layer.group_send)(
                 group_name,
-                {
-                    'type': 'session.started',
-                    'session_id': str(session.id),
-                    'class_session_id': str(class_session.id),
-                    'subject_code': class_session.subject.code,
-                    'subject_name': class_session.subject.name,
-                    'template_id': str(session.template.id) if session.template else None,
-                }
+                message_data
             )
+            
+            logger.info(f"✅ Successfully broadcast to group '{group_name}'")
         except Exception as e:
-            print(f"Error broadcasting session_started: {str(e)}")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ Error broadcasting session_started to '{group_name}': {str(e)}", exc_info=True)
         
         from .serializers import AttendanceSessionSerializer
         serializer = AttendanceSessionSerializer(session)
