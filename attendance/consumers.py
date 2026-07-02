@@ -229,10 +229,30 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             str(self.session_id)
         )
 
-        # Add student names to face boxes
+        # Convert FaceBox Pydantic models to dicts and add student names
+        faces_list = []
         for face in ml_result.get('faces', []):
-            if face.get('student_id') and face['student_id'] in self._student_names_map:
-                face['student_name'] = self._student_names_map[face['student_id']]
+            # Convert Pydantic model to dict if necessary
+            if hasattr(face, 'dict'):
+                face_dict = face.dict()
+            elif isinstance(face, dict):
+                face_dict = face
+            else:
+                face_dict = {
+                    'x': face.x,
+                    'y': face.y,
+                    'w': face.w,
+                    'h': face.h,
+                    'status': face.status,
+                    'student_id': face.student_id,
+                    'confidence': face.confidence,
+                }
+            
+            # Add student name if available
+            if face_dict.get('student_id') and face_dict['student_id'] in self._student_names_map:
+                face_dict['student_name'] = self._student_names_map[face_dict['student_id']]
+            
+            faces_list.append(face_dict)
 
         newly_detected = []
         for detection in ml_result.get('detections', []):
@@ -261,7 +281,7 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             'total_faces_detected': ml_result.get('total_faces_detected', 0),
             'enrolled_embeddings': len(self._embeddings_cache),
             'nearest_distance': ml_result.get('nearest_distance'),
-            'faces': ml_result.get('faces', []),
+            'faces': faces_list,
         }
 
     def _mark_student_present(self, session, student_id: str, confidence: float) -> dict | None:
@@ -445,6 +465,7 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
                 'confidence': result.get('confidence'),
                 'attendance_marked': result.get('attendance_marked', False),
                 'message': result.get('message'),
+                'faces': result.get('faces', []),
                 'timestamp': timezone.now().isoformat()
             }))
         
@@ -553,7 +574,8 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
                 'status': 'no_face_registered',
                 'face_detected': False,
                 'message': 'Face not registered. Please complete face enrollment first.',
-                'confidence': 0
+                'confidence': 0,
+                'faces': []
             }
         
         try:
@@ -574,12 +596,32 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
         
         # Check if student's face was detected
         detections = ml_result.get('detections', [])
+        
+        # Convert FaceBox Pydantic models to dicts
+        faces_list = []
+        for face in ml_result.get('faces', []):
+            if hasattr(face, 'dict'):
+                faces_list.append(face.dict())
+            elif isinstance(face, dict):
+                faces_list.append(face)
+            else:
+                faces_list.append({
+                    'x': face.x,
+                    'y': face.y,
+                    'w': face.w,
+                    'h': face.h,
+                    'status': face.status,
+                    'student_id': face.student_id,
+                    'confidence': face.confidence,
+                })
+        
         if not detections:
             return {
                 'status': 'no_face_detected',
                 'face_detected': False,
                 'message': 'No face detected. Please position your face in the camera.',
-                'confidence': 0
+                'confidence': 0,
+                'faces': faces_list
             }
         
         # Get best detection
@@ -596,7 +638,8 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
                     'face_detected': True,
                     'confidence': round(confidence, 4),
                     'attendance_marked': True,
-                    'message': f'✅ Attendance marked! (Confidence: {confidence*100:.0f}%)'
+                    'message': f'✅ Attendance marked! (Confidence: {confidence*100:.0f}%)',
+                    'faces': faces_list
                 }
         
         return {
@@ -604,7 +647,8 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
             'face_detected': True,
             'confidence': round(confidence, 4),
             'attendance_marked': False,
-            'message': f'Face detected but confidence too low ({confidence*100:.0f}%). Please move closer.'
+            'message': f'Face detected but confidence too low ({confidence*100:.0f}%). Please move closer.',
+            'faces': faces_list
         }
     
     @database_sync_to_async
