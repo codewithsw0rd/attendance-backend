@@ -4,7 +4,8 @@ from ..models import Subject, Enrollment, ClassSession
 class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
-        fields = '__all__' 
+        fields = ['id', 'name', 'code', 'department', 'semester', 'teacher', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at'] 
 
 class SubjectReadSerializer(serializers.ModelSerializer):
     teacher_name = serializers.CharField(source='teacher.user.get_full_name', read_only=True)

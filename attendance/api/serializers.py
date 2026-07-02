@@ -194,6 +194,8 @@ class EndSessionRequestSerializer(serializers.Serializer):
 
 class ClassSessionTemplateSerializer(serializers.ModelSerializer):
     """Serializer for recurring class session templates"""
+    # Convert BigAutoField to string to prevent JavaScript precision loss
+    id = serializers.CharField(read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     subject_code = serializers.CharField(source='subject.code', read_only=True)
     teacher_name = serializers.CharField(source='subject.teacher.user.first_name', read_only=True)
