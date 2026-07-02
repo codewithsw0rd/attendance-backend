@@ -238,9 +238,14 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="enrollments_{__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
         return response
     
-class ClassSessionViewSet(viewsets.ModelViewSet):
+class ClassSessionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only ClassSession viewset.
+    Class sessions are automatically created from ClassSessionTemplate.
+    Teachers manage schedules via SessionTemplate instead.
+    """
     queryset = ClassSession.objects.all()
-    serializer_class = ClassSessionSerializer
+    serializer_class = ClassSessionReadSerializer
     filterset_class = ClassSessionFilter
     search_fields = ['class_name', 'subject__name', 'subject__code']
     
@@ -261,15 +266,7 @@ class ClassSessionViewSet(viewsets.ModelViewSet):
     }
 
     def get_permissions(self):
-        if self.action == 'destroy':
-            return [IsClientUser()]
         return [IsAdminOrTeacher()]
-
-    def get_serializer_class(self):
-        """Use read serializer for list/retrieve, write serializer for create/update"""
-        if self.action in ['list', 'retrieve']:
-            return ClassSessionReadSerializer
-        return ClassSessionSerializer
 
     def get_queryset(self):
         user = self.request.user
@@ -280,21 +277,6 @@ class ClassSessionViewSet(viewsets.ModelViewSet):
         if user.user_type == UserType.TEACHER:
             return ClassSession.objects.filter(subject__teacher__user=user)
         return ClassSession.objects.none()
-
-    def _ensure_teacher_owns_subject(self, subject):
-        user = self.request.user
-        if user.user_type == UserType.TEACHER and subject.teacher.user != user:
-            raise PermissionDenied('You can only manage sessions for your own subjects.')
-
-    def perform_create(self, serializer):
-        self._ensure_teacher_owns_subject(serializer.validated_data['subject'])
-        serializer.save()
-
-    def perform_update(self, serializer):
-        self._ensure_teacher_owns_subject(
-            serializer.validated_data.get('subject', serializer.instance.subject)
-        )
-        serializer.save()
     
     def list(self, request, *args, **kwargs):
         self.queryset = apply_sorting(request, self.get_queryset(), self)

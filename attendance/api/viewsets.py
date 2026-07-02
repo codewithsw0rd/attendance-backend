@@ -21,7 +21,7 @@ from ..ml_client import process_attendance, MLServiceError
 from django.utils import timezone
 import json
 from drf_spectacular.utils import extend_schema
-from django.db.models import Count, Q
+from django.db.models import Count, Q, F
 from datetime import datetime
 
 
@@ -591,8 +591,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             attendance_status = 'ABSENT'
             logger.info(f"ABSENT: Face confidence too low for {student_profile.user.email} (confidence={confidence:.2%})")
         
-        # Create Attendance record (student-initiated)
-        attendance, created = Attendance.objects.get_or_create(
+        # Create or update Attendance record (student-initiated)
+        attendance, created = Attendance.objects.update_or_create(
             student=student_profile,
             class_session=class_session,
             attendance_session=active_session,
@@ -602,7 +602,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 'initiated_by_user': request.user,
                 'frame_detected': timezone.now(),
                 'detection_confidence': confidence,
-                'attempt_count': 1
+                'attempt_count': 1 if created else F('attempt_count') + 1
             }
         )
         

@@ -9,6 +9,19 @@ from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
 from ..models import Attendance, AttendanceSession
 
+# Attendance status constants
+ATTENDANCE_STATUS_PRESENT = 'PRESENT'
+ATTENDANCE_STATUS_ABSENT = 'ABSENT'
+ATTENDANCE_STATUS_LATE = 'LATE'
+ATTENDANCE_STATUS_EXCUSED = 'EXCUSED'
+ATTENDANCE_STATUS_PRESENT_ONLINE = 'PRESENT_ONLINE'
+
+# Statuses that count as "attended"
+ATTENDED_STATUSES = {ATTENDANCE_STATUS_PRESENT, ATTENDANCE_STATUS_LATE, ATTENDANCE_STATUS_PRESENT_ONLINE}
+
+# Statuses that count as "missed"
+MISSED_STATUSES = {ATTENDANCE_STATUS_ABSENT, ATTENDANCE_STATUS_EXCUSED}
+
 
 class StudentDashboardViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
@@ -44,28 +57,30 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             )
             
             total_classes = attendance_records.count()
-            classes_attended = attendance_records.filter(status='PRESENT').count()
-            classes_missed = attendance_records.filter(status='ABSENT').count()
+            classes_attended = attendance_records.filter(status__in=ATTENDED_STATUSES).count()
+            classes_missed = attendance_records.filter(status__in=MISSED_STATUSES).count()
             attendance_rate = (classes_attended / total_classes * 100) if total_classes > 0 else 0
             
+            # Calculate streak: consecutive PRESENT records from most recent
             streak = 0
-            recent_records = attendance_records.order_by('-marked_at')[:30]
-            current_date = None
+            recent_records = list(attendance_records.order_by('-marked_at')[:30])
             
+            # Build list of (date, status) for each unique date
+            date_statuses = []
+            seen_dates = set()
             for record in recent_records:
                 record_date = record.marked_at.date()
-                if current_date is None:
-                    current_date = record_date
-                
-                if record_date != current_date:
-                    if record.status != 'PRESENT':
-                        break
-                    streak += 1
-                    current_date = record_date
-                elif record.status == 'PRESENT':
-                    if current_date == record_date and streak == 0:
-                        streak = 1
+                if record_date not in seen_dates:
+                    date_statuses.append((record_date, record.status))
+                    seen_dates.add(record_date)
             
+            # Count consecutive attended (PRESENT, LATE, PRESENT_ONLINE) from most recent date backwards
+            for date, status_val in date_statuses:
+                if status_val in ATTENDED_STATUSES:
+                    streak += 1
+                else:
+                    break
+                        
             return Response({
                 'semester_attendance_rate': round(attendance_rate, 2),
                 'total_classes': total_classes,
@@ -104,8 +119,8 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 )
                 
                 total = subject_attendance.count()
-                attended = subject_attendance.filter(status='PRESENT').count()
-                missed = subject_attendance.filter(status='ABSENT').count()
+                attended = subject_attendance.filter(status__in=ATTENDED_STATUSES).count()
+                missed = subject_attendance.filter(status__in=MISSED_STATUSES).count()
                 rate = (attended / total * 100) if total > 0 else 0
                 
                 course_data.append({
@@ -596,10 +611,10 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     ended_at__isnull=True
                 ).first()
                 
-                logger.info(f"📋 Template {template.id} ({template.subject.code}): "
+                logger.info(f"Template {template.id} ({template.subject.code}): "
                            f"Active session = {'YES' if active_session else 'NO'}")
                 if active_session:
-                    logger.info(f"  → Session ID: {active_session.id}, Created: {active_session.created_at}")
+                    logger.info(f"  Session ID: {active_session.id}, Created: {active_session.created_at}")
                 
                 # Check if student already marked attendance for this template today
                 student_attendance = Attendance.objects.filter(
@@ -625,7 +640,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 # If teacher has started session, mark as RUNNING regardless of time
                 if active_session is not None:
                     session_status = 'running'
-                    logger.info(f"  ⏰ Teacher started session, marking as RUNNING (override time check)")
+                    logger.info(f"  Teacher started session, marking as RUNNING (override time check)")
                 else:
                     # Determine session_status purely on time if no active session
                     if now < class_start:
@@ -635,14 +650,14 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     else:
                         session_status = 'running'
                     
-                    logger.info(f"  ⏰ Time check: now={now.strftime('%H:%M:%S')}, "
+                    logger.info(f"  Time check: now={now.strftime('%H:%M:%S')}, "
                                f"class={template.start_time.strftime('%H:%M:%S')}-{template.end_time.strftime('%H:%M:%S')}, "
                                f"status={session_status}")
                 
                 # can_mark_attendance = TRUE only if teacher started session
                 can_mark_attendance = (active_session is not None)
                 
-                logger.info(f"  ✓ Final: session_status={session_status}, "
+                logger.info(f"  Final: session_status={session_status}, "
                            f"can_mark_attendance={can_mark_attendance}")
                 
                 classes_data.append({

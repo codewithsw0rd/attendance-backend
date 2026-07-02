@@ -27,7 +27,7 @@ def get_user_from_token(token: str):
             return AnonymousUser()
         
         user = CustomUser.objects.get(id=user_id)
-        logger.info(f"✅ User authenticated: {user_id}")
+        logger.info(f"User authenticated: {user_id}")
         return user
     except CustomUser.DoesNotExist:
         logger.warning(f"User not found for id from token")
