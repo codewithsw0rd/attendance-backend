@@ -90,9 +90,8 @@ class AdminReportsViewSet(viewsets.ViewSet):
                     queryset = queryset.filter(marked_at__date__lte=end_date)
             
             if department_filter:
-                queryset = queryset.filter(
-                    class_session__subject__teacher__user__studentprofile__department=department_filter
-                )
+                # Filter by student's department, not teacher's
+                queryset = queryset.filter(student__department=department_filter)
             
             if teacher_id_filter:
                 queryset = queryset.filter(class_session__subject__teacher__user_id=teacher_id_filter)
@@ -200,9 +199,8 @@ class AdminReportsViewSet(viewsets.ViewSet):
                     queryset = queryset.filter(marked_at__date__lte=end_date)
             
             if department_filter:
-                queryset = queryset.filter(
-                    class_session__subject__teacher__user__studentprofile__department=department_filter
-                )
+                # Filter by student's department, not teacher's
+                queryset = queryset.filter(student__department=department_filter)
             
             if teacher_id_filter:
                 queryset = queryset.filter(class_session__subject__teacher__user_id=teacher_id_filter)

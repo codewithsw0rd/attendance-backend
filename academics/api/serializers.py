@@ -8,12 +8,24 @@ class SubjectSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at'] 
 
 class SubjectReadSerializer(serializers.ModelSerializer):
-    teacher_name = serializers.CharField(source='teacher.user.get_full_name', read_only=True)
-    teacher_email = serializers.EmailField(source='teacher.user.email', read_only=True)
+    teacher_name = serializers.SerializerMethodField(read_only=True)
+    teacher_email = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = Subject
         fields = ['id', 'name', 'code', 'department', 'semester', 'teacher', 'teacher_name', 'teacher_email', 'created_at', 'updated_at']
+    
+    def get_teacher_name(self, obj):
+        if not obj.teacher:
+            return None
+        user = obj.teacher.user
+        full_name = f"{user.first_name} {user.last_name}".strip()
+        return full_name if full_name else user.email
+    
+    def get_teacher_email(self, obj):
+        if not obj.teacher:
+            return None
+        return obj.teacher.user.email
 
 class EnrollmentSerializer(serializers.ModelSerializer):
     class Meta:
