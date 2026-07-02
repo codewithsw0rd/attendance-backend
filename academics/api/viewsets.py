@@ -164,9 +164,79 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
         'updated_at': 'updated_at',
     }
     
+    def get_serializer_class(self):
+        """Use read serializer for list/retrieve, write serializer for create/update"""
+        if self.action in ['list', 'retrieve']:
+            return EnrollmentReadSerializer
+        return EnrollmentSerializer
+    
     def list(self, request, *args, **kwargs):
         self.queryset = apply_sorting(request, self.get_queryset(), self)
         return super().list(request, *args, **kwargs)
+    
+    @action(detail=False, methods=['get'], url_path='export_excel')
+    def export_excel(self, request):
+        """Export enrollments to Excel with filtering, searching, sorting"""
+        queryset = self.get_queryset()
+        
+        filterset = self.filterset_class(request.GET, queryset=queryset)
+        queryset = filterset.qs
+        
+        search_query = request.query_params.get('search', '')
+        if search_query:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(student__roll_number__icontains=search_query) |
+                Q(subject__name__icontains=search_query) |
+                Q(subject__code__icontains=search_query)
+            )
+        
+        ordering = request.query_params.get('ordering', 'created_at')
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Enrollments"
+        
+        headers = ['Student Name', 'Roll No', 'Department', 'Subject', 'Code', 'Enrolled Date']
+        ws.append(headers)
+        
+        from openpyxl.styles import Font, PatternFill
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+        
+        for enrollment in queryset:
+            student_name = f"{enrollment.student.user.first_name} {enrollment.student.user.last_name}".strip()
+            ws.append([
+                student_name,
+                enrollment.student.roll_number,
+                enrollment.student.department or "",
+                enrollment.subject.name,
+                enrollment.subject.code,
+                enrollment.created_at.strftime('%Y-%m-%d') if enrollment.created_at else "",
+            ])
+        
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 20
+        ws.column_dimensions['D'].width = 25
+        ws.column_dimensions['E'].width = 12
+        ws.column_dimensions['F'].width = 15
+        
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="enrollments_{__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
+        return response
     
 class ClassSessionViewSet(viewsets.ModelViewSet):
     queryset = ClassSession.objects.all()
@@ -194,6 +264,12 @@ class ClassSessionViewSet(viewsets.ModelViewSet):
         if self.action == 'destroy':
             return [IsClientUser()]
         return [IsAdminOrTeacher()]
+
+    def get_serializer_class(self):
+        """Use read serializer for list/retrieve, write serializer for create/update"""
+        if self.action in ['list', 'retrieve']:
+            return ClassSessionReadSerializer
+        return ClassSessionSerializer
 
     def get_queryset(self):
         user = self.request.user
@@ -223,3 +299,72 @@ class ClassSessionViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         self.queryset = apply_sorting(request, self.get_queryset(), self)
         return super().list(request, *args, **kwargs)
+    
+    @action(detail=False, methods=['get'], url_path='export_excel')
+    def export_excel(self, request):
+        """Export class sessions to Excel with filtering, searching, sorting"""
+        queryset = self.get_queryset()
+        
+        filterset = self.filterset_class(request.GET, queryset=queryset)
+        queryset = filterset.qs
+        
+        search_query = request.query_params.get('search', '')
+        if search_query:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(class_name__icontains=search_query) |
+                Q(subject__name__icontains=search_query) |
+                Q(subject__code__icontains=search_query)
+            )
+        
+        ordering = request.query_params.get('ordering', '-date')
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Classes"
+        
+        headers = ['Class Name', 'Subject', 'Code', 'Date', 'Start Time', 'End Time', 'Teacher']
+        ws.append(headers)
+        
+        from openpyxl.styles import Font, PatternFill
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+        
+        for session in queryset:
+            teacher_name = ""
+            if session.subject.teacher:
+                teacher_name = f"{session.subject.teacher.user.first_name} {session.subject.teacher.user.last_name}".strip()
+            
+            ws.append([
+                session.class_name,
+                session.subject.name,
+                session.subject.code,
+                session.date.strftime('%Y-%m-%d') if session.date else "",
+                session.start_time.strftime('%H:%M') if session.start_time else "",
+                session.end_time.strftime('%H:%M') if session.end_time else "",
+                teacher_name,
+            ])
+        
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 25
+        ws.column_dimensions['C'].width = 12
+        ws.column_dimensions['D'].width = 15
+        ws.column_dimensions['E'].width = 12
+        ws.column_dimensions['F'].width = 12
+        ws.column_dimensions['G'].width = 25
+        
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="classes_{__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
+        return response
