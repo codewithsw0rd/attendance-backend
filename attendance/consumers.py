@@ -725,15 +725,19 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
             
             for template in templates:
                 # Create or get ClassSession for today based on template
-                class_session, created = ClassSession.objects.get_or_create(
+                class_session = ClassSession.objects.filter(
                     subject=template.subject,
-                    date=today,
-                    defaults={
-                        'class_name': f"{template.subject.code} - {template.get_day_of_week_display()}",
-                        'start_time': template.start_time,
-                        'end_time': template.end_time,
-                    }
-                )
+                    date=today
+                ).first()
+                
+                if not class_session:
+                    class_session = ClassSession.objects.create(
+                        subject=template.subject,
+                        date=today,
+                        class_name=f"{template.subject.code} - {template.get_day_of_week_display()}",
+                        start_time=template.start_time,
+                        end_time=template.end_time,
+                    )
                 
                 group_name = f'session_students_{class_session.id}'
                 if group_name not in groups:

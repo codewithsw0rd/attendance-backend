@@ -858,15 +858,19 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 
                 # Create/get ClassSession for today based on template
                 today = timezone.now().date()
-                class_session, _ = ClassSession.objects.get_or_create(
+                class_session = ClassSession.objects.filter(
                     subject=template.subject,
                     date=today,
-                    defaults={
-                        'class_name': f"{template.subject.code} - {template.get_day_of_week_display()}",
-                        'start_time': template.start_time,
-                        'end_time': template.end_time,
-                    }
-                )
+                ).first()
+                
+                if not class_session:
+                    class_session = ClassSession.objects.create(
+                        subject=template.subject,
+                        date=today,
+                        class_name=f"{template.subject.code} - {template.get_day_of_week_display()}",
+                        start_time=template.start_time,
+                        end_time=template.end_time,
+                    )
                 
                 # Create new AttendanceSession linked to template
                 session = AttendanceSession.objects.create(
