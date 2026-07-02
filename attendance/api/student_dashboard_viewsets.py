@@ -128,7 +128,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 # Get teacher name
                 teacher_name = ''
                 if subject.teacher and subject.teacher.user:
-                    teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                    first_name = (subject.teacher.user.first_name or '').strip()
+                    last_name = (subject.teacher.user.last_name or '').strip()
+                    teacher_name = f"{first_name} {last_name}".strip()
                     if not teacher_name:
                         teacher_name = subject.teacher.user.email
                 
@@ -204,7 +206,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 teacher_name = ''
                 
                 if subject.teacher and subject.teacher.user:
-                    teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                    first_name = (subject.teacher.user.first_name or '').strip()
+                    last_name = (subject.teacher.user.last_name or '').strip()
+                    teacher_name = f"{first_name} {last_name}".strip()
                     if not teacher_name:
                         teacher_name = subject.teacher.user.email
                 
@@ -323,6 +327,10 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             # Get total count before pagination
             total_count = queryset.count()
             
+            # Calculate summary stats for the filtered data
+            total_present = queryset.filter(status='PRESENT').count()
+            total_absent = queryset.filter(status='ABSENT').count()
+            
             # Apply pagination
             total_pages = (total_count + page_size - 1) // page_size
             start_idx = (page - 1) * page_size
@@ -337,7 +345,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 teacher_name = ''
                 
                 if subject.teacher and subject.teacher.user:
-                    teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                    first_name = (subject.teacher.user.first_name or '').strip()
+                    last_name = (subject.teacher.user.last_name or '').strip()
+                    teacher_name = f"{first_name} {last_name}".strip()
                     if not teacher_name:
                         teacher_name = subject.teacher.user.email
                 
@@ -361,6 +371,10 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     'total_count': total_count,
                     'total_pages': total_pages,
                 },
+                'summary': {
+                    'total_present': total_present,
+                    'total_absent': total_absent,
+                },
             }, status=status.HTTP_200_OK)
         
         except Exception as e:
@@ -372,7 +386,14 @@ class StudentDashboardViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def enrolled_subjects(self, request):
         """
-        Get list of all enrolled subjects for current student.
+        Get list of all enrolled subjects for current student with search, filter, sort, and pagination.
+        
+        Query Parameters:
+            - search: Search by subject name or code (optional)
+            - sort_by: name|code|rate|department (default: name)
+            - sort_order: asc|desc (default: asc)
+            - page: Page number (default: 1)
+            - page_size: Items per page (default: 10)
         
         Returns array of:
             - subject_id: Subject ID
@@ -394,11 +415,19 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
             
-            # Get student's enrollments
+            # Get query parameters
+            search_query = request.query_params.get('search', '').strip()
+            sort_by = request.query_params.get('sort_by', 'name')
+            sort_order = request.query_params.get('sort_order', 'asc')
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 10))
+            
+            # Get student's enrollments with related data
             enrollments = Enrollment.objects.filter(
                 student__user=request.user
             ).select_related('subject', 'subject__teacher', 'subject__teacher__user')
             
+            # Build list of subject data with stats
             subjects_data = []
             
             for enrollment in enrollments:
@@ -419,7 +448,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 teacher_name = ''
                 teacher_email = ''
                 if subject.teacher and subject.teacher.user:
-                    teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                    first_name = (subject.teacher.user.first_name or '').strip()
+                    last_name = (subject.teacher.user.last_name or '').strip()
+                    teacher_name = f"{first_name} {last_name}".strip()
                     if not teacher_name:
                         teacher_name = subject.teacher.user.email
                     teacher_email = subject.teacher.user.email
@@ -438,7 +469,45 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     'attendance_rate': round(rate, 2),
                 })
             
-            return Response(subjects_data, status=status.HTTP_200_OK)
+            # Apply search filter
+            if search_query:
+                subjects_data = [
+                    s for s in subjects_data
+                    if search_query.lower() in s['subject_name'].lower() or
+                       search_query.lower() in s['subject_code'].lower() or
+                       search_query.lower() in s['teacher_name'].lower()
+                ]
+            
+            # Apply sorting
+            reverse_sort = sort_order.lower() == 'desc'
+            
+            if sort_by == 'code':
+                subjects_data.sort(key=lambda x: x['subject_code'], reverse=reverse_sort)
+            elif sort_by == 'rate':
+                subjects_data.sort(key=lambda x: x['attendance_rate'], reverse=reverse_sort)
+            elif sort_by == 'department':
+                subjects_data.sort(key=lambda x: x['department'], reverse=reverse_sort)
+            else:  # name (default)
+                subjects_data.sort(key=lambda x: x['subject_name'], reverse=reverse_sort)
+            
+            # Get total count before pagination
+            total_count = len(subjects_data)
+            
+            # Apply pagination
+            total_pages = (total_count + page_size - 1) // page_size
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            paginated_subjects = subjects_data[start_idx:end_idx]
+            
+            return Response({
+                'subjects': paginated_subjects,
+                'pagination': {
+                    'current_page': page,
+                    'page_size': page_size,
+                    'total_count': total_count,
+                    'total_pages': total_pages,
+                },
+            }, status=status.HTTP_200_OK)
         
         except Exception as e:
             return Response(
@@ -504,7 +573,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             # Get teacher name
             teacher_name = ''
             if subject.teacher and subject.teacher.user:
-                teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                first_name = (subject.teacher.user.first_name or '').strip()
+                last_name = (subject.teacher.user.last_name or '').strip()
+                teacher_name = f"{first_name} {last_name}".strip()
                 if not teacher_name:
                     teacher_name = subject.teacher.user.email
             
