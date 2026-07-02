@@ -4,6 +4,7 @@ from academics.api.viewsets import *
 from attendance.api.viewsets import *
 from attendance.api.dashboard_viewsets import DashboardViewSet
 from attendance.api.analytics_viewsets import AnalyticsViewSet
+from attendance.api.admin_reports_viewsets import AdminReportsViewSet
 
 router = DefaultRouter()
 
@@ -27,3 +28,6 @@ router.register('dashboard', DashboardViewSet, basename='dashboard')
 
 #-----------------------------------ANALYTICS-----------------------------------------------------
 router.register('analytics', AnalyticsViewSet, basename='analytics')
+
+#-----------------------------------ADMIN REPORTS-----------------------------------------------------
+router.register('admin-reports', AdminReportsViewSet, basename='admin-reports')
