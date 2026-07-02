@@ -10,6 +10,16 @@ from academics.models import Enrollment, ClassSession, Subject
 from ..models import Attendance
 from core.utils.custom_perms import IsClientUser
 
+# Attendance status constants
+ATTENDANCE_STATUS_PRESENT = 'PRESENT'
+ATTENDANCE_STATUS_ABSENT = 'ABSENT'
+ATTENDANCE_STATUS_LATE = 'LATE'
+ATTENDANCE_STATUS_EXCUSED = 'EXCUSED'
+ATTENDANCE_STATUS_PRESENT_ONLINE = 'PRESENT_ONLINE'
+
+# Statuses that count as "attended"
+ATTENDED_STATUSES = {ATTENDANCE_STATUS_PRESENT, ATTENDANCE_STATUS_LATE, ATTENDANCE_STATUS_PRESENT_ONLINE}
+
 
 class DashboardViewSet(viewsets.ViewSet):
     """
@@ -67,7 +77,7 @@ class DashboardViewSet(viewsets.ViewSet):
                 marked_at__date=today
             )
 
-            today_present = today_attendance.filter(status='PRESENT').count()
+            today_present = today_attendance.filter(status__in=ATTENDED_STATUSES).count()
             today_total = today_attendance.count()
             today_rate = (today_present / today_total * 100) if today_total > 0 else 0
             today_rate = round(today_rate, 1)
@@ -107,7 +117,7 @@ class DashboardViewSet(viewsets.ViewSet):
                 marked_at__date=date
             )
 
-            present_count = day_attendance.filter(status='PRESENT').count()
+            present_count = day_attendance.filter(status__in=ATTENDED_STATUSES).count()
             total_count = day_attendance.count()
 
             # Calculate rate

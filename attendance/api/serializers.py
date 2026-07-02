@@ -57,9 +57,11 @@ class AttendanceReadSerializer(serializers.ModelSerializer):
         fields = ['id', 'student', 'student_detail', 'class_session', 'class_session_detail', 'status', 'marked_at', 'verification_log']
     
     def get_student_detail(self, obj):
+        # Include full name (first + last)
+        full_name = f"{obj.student.first_name} {obj.student.last_name}".strip()
         return {
             'email': obj.student.user.email,
-            'name': obj.student.first_name,
+            'name': full_name,
             'roll_number': obj.student.roll_number,
         }
     
