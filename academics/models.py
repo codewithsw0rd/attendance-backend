@@ -43,3 +43,6 @@ class ClassSession(BaseModel):
     start_time = models.TimeField()
     end_time = models.TimeField()
     
+    class Meta:
+        unique_together = ('subject', 'date', 'start_time')
+    
