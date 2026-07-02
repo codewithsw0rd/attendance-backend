@@ -47,10 +47,8 @@ class ClassSessionTemplate(models.Model):
     Allows the same attendance session to be used across multiple dates.
     Example: CS101 every Monday 9:00 AM - 10:00 AM
     
-    Note: Uses BigAutoField (integer ID) not UUID, to align with migration 0004.
+    Note: Uses Django's default BigAutoField for ID (auto-incremented integer).
     """
-    # Explicitly define ID as BigAutoField (not UUID from BaseModel)
-    id = models.BigAutoField(primary_key=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
