@@ -622,20 +622,25 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 # Add 5 min grace period to end time
                 class_end_with_grace = class_end + timezone.timedelta(minutes=5)
                 
-                # Determine session_status purely on time
-                if now < class_start:
-                    session_status = 'upcoming'
-                elif now > class_end_with_grace:
-                    session_status = 'completed'
-                else:
+                # If teacher has started session, mark as RUNNING regardless of time
+                if active_session is not None:
                     session_status = 'running'
+                    logger.info(f"  ⏰ Teacher started session, marking as RUNNING (override time check)")
+                else:
+                    # Determine session_status purely on time if no active session
+                    if now < class_start:
+                        session_status = 'upcoming'
+                    elif now > class_end_with_grace:
+                        session_status = 'completed'
+                    else:
+                        session_status = 'running'
+                    
+                    logger.info(f"  ⏰ Time check: now={now.strftime('%H:%M:%S')}, "
+                               f"class={template.start_time.strftime('%H:%M:%S')}-{template.end_time.strftime('%H:%M:%S')}, "
+                               f"status={session_status}")
                 
-                logger.info(f"  ⏰ Time check: now={now.strftime('%H:%M:%S')}, "
-                           f"class={template.start_time.strftime('%H:%M:%S')}-{template.end_time.strftime('%H:%M:%S')}, "
-                           f"status={session_status}")
-                
-                # can_mark_attendance = TRUE only if time window is 'running' AND teacher started session
-                can_mark_attendance = (session_status == 'running' and active_session is not None)
+                # can_mark_attendance = TRUE only if teacher started session
+                can_mark_attendance = (active_session is not None)
                 
                 logger.info(f"  ✓ Final: session_status={session_status}, "
                            f"can_mark_attendance={can_mark_attendance}")
