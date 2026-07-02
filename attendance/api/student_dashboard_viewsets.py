@@ -625,7 +625,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 can_mark_attendance = (session_status == 'running' and active_session is not None)
                 
                 classes_data.append({
-                    'id': str(template.id),
+                    'id': str(active_session.id) if active_session else str(template.id),  # Use AttendanceSession ID if active, else template ID
                     'class_name': f"{template.subject.code} - {template.get_day_of_week_display()} {template.start_time.strftime('%H:%M')}-{template.end_time.strftime('%H:%M')}",
                     'subject_id': str(subject.id),
                     'subject_name': subject.name,
