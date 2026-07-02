@@ -304,6 +304,298 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
         }
 
 
+class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for student-initiated face detection and attendance marking.
+    Student streams frames from their device camera, ML detects their face and marks attendance.
+    
+    Flow:
+    1. Student opens running session
+    2. Connects to WebSocket with attendance_session_id
+    3. Streams video frames continuously
+    4. ML detects student's face
+    5. Attendance auto-marked when recognized
+    """
+    
+    async def connect(self):
+        """Handle WebSocket connection for student attendance streaming."""
+        self.attendance_session_id = self.scope['url_route']['kwargs']['session_id']
+        self.session_group_name = f'student_attendance_{self.attendance_session_id}'
+        user = self.scope['user']
+        
+        if not user.is_authenticated:
+            logger.warning(f"WebSocket auth failed for student attendance {self.attendance_session_id}")
+            await self.close(code=4003)
+            return
+        
+        if user.user_type != UserType.STUDENT:
+            logger.warning(f"Non-student {user.id} tried to stream attendance")
+            await self.close(code=4003)
+            return
+        
+        # Verify attendance session exists and is active
+        session_data = await self.get_session_data()
+        if not session_data:
+            await self.close(code=4004)
+            return
+        
+        self.user_id = str(user.id)
+        self.student_profile = user.studentprofile
+        self.attendance_session = session_data
+        
+        try:
+            await self.channel_layer.group_add(self.session_group_name, self.channel_name)
+        except Exception as e:
+            logger.error(f"Channel layer error: {str(e)}")
+            await self.close(code=1011)
+            return
+        
+        # Load student's own face embeddings
+        self._student_embedding = await self._load_student_embedding()
+        self._frame_count = 0
+        self._frame_lock = asyncio.Lock()
+        
+        await self.accept()
+        
+        logger.info(f"Student {self.user_id} connected to attendance stream for session {self.attendance_session_id}")
+        await self.send(json.dumps({
+            'type': 'connection_established',
+            'session_id': str(self.attendance_session_id),
+            'message': 'Connected. Streaming frames for attendance detection...',
+            'has_face_registered': self._student_embedding is not None
+        }))
+    
+    async def receive(self, text_data=None, bytes_data=None):
+        """Receive and process video frame from student."""
+        if self._frame_lock.locked():
+            return
+        
+        try:
+            frame_io = None
+            
+            if text_data:
+                try:
+                    message = json.loads(text_data)
+                    if message.get('type') != 'frame' or 'data' not in message:
+                        return
+                    data_url = message['data']
+                    if isinstance(data_url, str) and ',' in data_url:
+                        _, b64_data = data_url.split(',', 1)
+                    else:
+                        b64_data = data_url
+                    frame_bytes = base64.b64decode(b64_data)
+                    frame_io = BytesIO(frame_bytes)
+                except Exception as e:
+                    logger.error(f"Frame decode error for student {self.user_id}: {str(e)}")
+                    return
+            
+            elif bytes_data:
+                frame_io = BytesIO(bytes_data)
+            
+            if frame_io is None:
+                return
+            
+            # Check if student already marked attendance
+            already_marked = await self._check_already_marked()
+            if already_marked:
+                # Stop processing if already marked
+                await self.send(json.dumps({
+                    'type': 'frame_processed',
+                    'status': 'already_marked',
+                    'message': 'You have already marked attendance for this session',
+                    'timestamp': timezone.now().isoformat()
+                }))
+                return
+            
+            try:
+                async with self._frame_lock:
+                    result = await asyncio.wait_for(
+                        self.process_frame(frame_io),
+                        timeout=8.0
+                    )
+            except asyncio.TimeoutError:
+                logger.warning(f"ML timeout for student {self.user_id}")
+                await self.send(json.dumps({
+                    'type': 'frame_processed',
+                    'status': 'timeout',
+                    'message': 'Processing timeout',
+                    'timestamp': timezone.now().isoformat()
+                }))
+                return
+            
+            await self.send(json.dumps({
+                'type': 'frame_processed',
+                'status': result['status'],
+                'face_detected': result.get('face_detected', False),
+                'confidence': result.get('confidence'),
+                'attendance_marked': result.get('attendance_marked', False),
+                'message': result.get('message'),
+                'timestamp': timezone.now().isoformat()
+            }))
+        
+        except Exception as e:
+            logger.error(f"Frame processing error for student {self.user_id}: {str(e)}")
+            await self.send(json.dumps({'type': 'error', 'detail': str(e)}))
+    
+    async def disconnect(self, close_code):
+        """Handle WebSocket disconnection."""
+        if hasattr(self, 'session_group_name'):
+            try:
+                await self.channel_layer.group_discard(self.session_group_name, self.channel_name)
+            except Exception as e:
+                logger.error(f"Disconnect error: {str(e)}")
+        logger.info(f"Student {self.user_id} disconnected from attendance stream")
+    
+    @database_sync_to_async
+    def get_session_data(self):
+        """Verify attendance session exists and is active."""
+        try:
+            from attendance.models import AttendanceSession
+            session = AttendanceSession.objects.select_related('class_session__subject').get(
+                id=UUID(self.attendance_session_id),
+                ended_at=None  # Session must still be active
+            )
+            return {
+                'id': str(session.id),
+                'class_session_id': str(session.class_session.id),
+                'subject_id': str(session.class_session.subject.id),
+            }
+        except Exception as e:
+            logger.error(f"Session lookup error: {str(e)}")
+            return None
+    
+    @database_sync_to_async
+    def _load_student_embedding(self):
+        """Load this student's face embedding for recognition."""
+        try:
+            face_data = FaceData.objects.prefetch_related('embeddings').get(
+                student=self.student_profile,
+                is_enrolled=True
+            )
+            # Get average embedding or first one
+            embeddings = list(face_data.embeddings.all())
+            if embeddings:
+                return embeddings[0].embedding  # Use first enrolled embedding
+            return None
+        except Exception as e:
+            logger.error(f"Error loading student embedding for {self.user_id}: {str(e)}")
+            return None
+    
+    @database_sync_to_async
+    def _check_already_marked(self):
+        """Check if student already marked attendance for this session."""
+        try:
+            from attendance.models import Attendance, AttendanceSession
+            session = AttendanceSession.objects.get(id=UUID(self.attendance_session_id))
+            return Attendance.objects.filter(
+                student=self.student_profile,
+                attendance_session=session
+            ).exists()
+        except Exception as e:
+            logger.error(f"Error checking marked status: {str(e)}")
+            return False
+    
+    async def process_frame(self, frame_io):
+        """Process student's video frame and detect their face."""
+        self._frame_count += 1
+        
+        if not self._student_embedding:
+            return {
+                'status': 'no_face_registered',
+                'face_detected': False,
+                'message': 'Face not registered. Please complete face enrollment first.',
+                'confidence': 0
+            }
+        
+        try:
+            ml_result = await database_sync_to_async(process_continuous_detection)(
+                frame_io,
+                [self._student_embedding],  # Only check against student's own embedding
+                [self.user_id],  # Only looking for this student
+                str(self.attendance_session_id)
+            )
+        except MLServiceError as e:
+            logger.error(f"ML service error for student {self.user_id}: {str(e)}")
+            return {
+                'status': 'ml_error',
+                'face_detected': False,
+                'message': f'ML service error: {str(e)}',
+                'confidence': 0
+            }
+        
+        # Check if student's face was detected
+        detections = ml_result.get('detections', [])
+        if not detections:
+            return {
+                'status': 'no_face_detected',
+                'face_detected': False,
+                'message': 'No face detected. Please position your face in the camera.',
+                'confidence': 0
+            }
+        
+        # Get best detection
+        best_detection = max(detections, key=lambda x: x.get('confidence', 0))
+        confidence = best_detection.get('confidence', 0)
+        
+        # Mark attendance if confidence is high enough (e.g., > 0.7)
+        CONFIDENCE_THRESHOLD = 0.7
+        if confidence >= CONFIDENCE_THRESHOLD:
+            marked = await self._mark_student_present(confidence)
+            if marked:
+                return {
+                    'status': 'attendance_marked',
+                    'face_detected': True,
+                    'confidence': round(confidence, 4),
+                    'attendance_marked': True,
+                    'message': f'✅ Attendance marked! (Confidence: {confidence*100:.0f}%)'
+                }
+        
+        return {
+            'status': 'face_detected_low_confidence',
+            'face_detected': True,
+            'confidence': round(confidence, 4),
+            'attendance_marked': False,
+            'message': f'Face detected but confidence too low ({confidence*100:.0f}%). Please move closer.'
+        }
+    
+    @database_sync_to_async
+    def _mark_student_present(self, confidence: float) -> bool:
+        """Mark student as present in attendance session."""
+        try:
+            from attendance.models import AttendanceSession, Attendance
+            
+            session = AttendanceSession.objects.get(id=UUID(self.attendance_session_id))
+            
+            # Create attendance record (will fail if already exists due to unique constraint)
+            attendance, created = Attendance.objects.get_or_create(
+                student=self.student_profile,
+                attendance_session=session,
+                defaults={
+                    'class_session': session.class_session,
+                    'status': 'PRESENT',
+                    'frame_detected': timezone.now(),
+                    'detection_confidence': confidence,
+                    'initiated_by': 'student',  # Student-initiated via WebSocket
+                }
+            )
+            
+            if created:
+                # Update marked_students list
+                marked = list(session.marked_students or [])
+                if self.user_id not in marked:
+                    marked.append(self.user_id)
+                    AttendanceSession.objects.filter(pk=session.pk).update(marked_students=marked)
+                
+                logger.info(f"Student {self.user_id} marked present in session {self.attendance_session_id}")
+                return True
+            else:
+                logger.info(f"Student {self.user_id} already marked in session {self.attendance_session_id}")
+                return False
+        except Exception as e:
+            logger.error(f"Error marking attendance for student {self.user_id}: {str(e)}")
+            return False
+
+
 class StudentNotificationConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for real-time student notifications.

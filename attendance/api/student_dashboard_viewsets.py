@@ -637,6 +637,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     'teacher_id': str(subject.teacher.user.id) if subject.teacher else '',
                     'session_status': session_status,
                     'is_session_active': active_session is not None,
+                    'attendance_session_id': str(active_session.id) if active_session else None,  # NEW: WebSocket session ID
                     'can_mark_attendance': can_mark_attendance,
                     'has_marked_attendance': student_attendance is not None,
                     'attendance_id': str(student_attendance.id) if student_attendance else None,
