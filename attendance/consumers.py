@@ -376,9 +376,27 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
         
         logger.info(f"Student {self.user_id} disconnected from notifications")
     
-    @database_sync_to_async
-    def _join_enrolled_class_groups(self):
+    async def _join_enrolled_class_groups(self):
         """Join groups for all enrolled classes."""
+        try:
+            groups = await self._get_enrolled_class_groups()
+            
+            # Actually join each group
+            for group_name in groups:
+                try:
+                    await self.channel_layer.group_add(group_name, self.channel_name)
+                except Exception as e:
+                    logger.error(f"Error joining session group {group_name}: {str(e)}")
+            
+            self.session_groups = groups
+            logger.info(f"Student {self.user_id} joined {len(groups)} session groups: {groups}")
+        except Exception as e:
+            logger.error(f"Error joining enrolled class groups: {str(e)}")
+            self.session_groups = []
+    
+    @database_sync_to_async
+    def _get_enrolled_class_groups(self):
+        """Get list of groups for all enrolled classes."""
         try:
             from academics.models import ClassSession
             
@@ -403,11 +421,11 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
                 group_name = f'session_students_{session.id}'
                 groups.append(group_name)
             
-            self.session_groups = groups
-            logger.debug(f"Student {self.user_id} will join {len(groups)} session groups")
+            logger.debug(f"Found {len(groups)} enrolled class sessions for student {self.user_id}")
+            return groups
         except Exception as e:
-            logger.error(f"Error joining enrolled class groups: {str(e)}")
-            self.session_groups = []
+            logger.error(f"Error getting enrolled class groups: {str(e)}")
+            return []
     
     async def session_started(self, event):
         """

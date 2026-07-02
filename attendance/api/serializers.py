@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from ..models import FaceData, Attendance, AttendanceLog, FaceEmbedding, AttendanceSession
+from ..models import FaceData, Attendance, AttendanceLog, FaceEmbedding, AttendanceSession, ClassSessionTemplate
 
 class FaceEmbeddingSerializer(serializers.ModelSerializer):
     class Meta:
@@ -190,3 +190,34 @@ class StartSessionRequestSerializer(serializers.Serializer):
 class EndSessionRequestSerializer(serializers.Serializer):
     """Request schema for ending a real-time attendance session"""
     session_id = serializers.UUIDField(required=True)
+
+
+class ClassSessionTemplateSerializer(serializers.ModelSerializer):
+    """Serializer for recurring class session templates"""
+    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    subject_code = serializers.CharField(source='subject.code', read_only=True)
+    teacher_name = serializers.CharField(source='subject.teacher.user.first_name', read_only=True)
+    day_of_week_display = serializers.CharField(source='get_day_of_week_display', read_only=True)
+    
+    class Meta:
+        model = ClassSessionTemplate
+        fields = [
+            'id', 'subject', 'subject_name', 'subject_code', 'teacher_name',
+            'day_of_week', 'day_of_week_display', 'start_time', 'end_time',
+            'max_attendance_marking_minutes', 'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class CreateClassSessionTemplateSerializer(serializers.ModelSerializer):
+    """Serializer for creating recurring class session templates"""
+    class Meta:
+        model = ClassSessionTemplate
+        fields = [
+            'subject', 'day_of_week', 'start_time', 'end_time',
+            'max_attendance_marking_minutes', 'is_active'
+        ]
+        extra_kwargs = {
+            'max_attendance_marking_minutes': {'required': False},
+            'is_active': {'required': False, 'default': True}
+        }
