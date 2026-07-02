@@ -348,15 +348,6 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
             self.user_id = str(user.id)
             logger.info(f"✅ User ID set: {self.user_id}")
             
-            # Get student profile safely
-            try:
-                self.student_profile = user.studentprofile
-                logger.info(f"✅ Student profile loaded")
-            except AttributeError:
-                logger.error(f"❌ Student {self.user_id} has no StudentProfile")
-                await self.close(code=4004)
-                return
-            
             self.attendance_session = session_data
             
             try:
@@ -497,22 +488,42 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
     def _load_student_embedding(self):
         """Load this student's face embedding for recognition."""
         try:
+            from accounts.models import CustomUser, StudentProfile
+            
+            logger.info(f"🔍 Loading embedding for student {self.user_id}")
+            
+            # Get student user
+            student_user = CustomUser.objects.get(id=self.user_id)
+            logger.info(f"✅ Found student user: {student_user}")
+            
+            # Get student profile
+            try:
+                student_profile = StudentProfile.objects.get(user=student_user)
+                logger.info(f"✅ Found student profile: {student_profile}")
+            except StudentProfile.DoesNotExist:
+                logger.warning(f"⚠️ No StudentProfile found for student {self.user_id}")
+                return None
+            
+            # Get face data
             face_data = FaceData.objects.prefetch_related('embeddings').get(
-                student=self.student_profile,
+                student=student_profile,
                 is_enrolled=True
             )
-            # Get average embedding or first one
+            
+            # Get embeddings
             embeddings = list(face_data.embeddings.all())
             if embeddings:
                 logger.info(f"✅ Found {len(embeddings)} enrollments for student {self.user_id}")
                 return embeddings[0].embedding  # Use first enrolled embedding
+            
             logger.warning(f"⚠️ No embeddings found for student {self.user_id}")
             return None
+            
         except FaceData.DoesNotExist:
             logger.warning(f"⚠️ No face data registered for student {self.user_id}")
             return None
         except Exception as e:
-            logger.error(f"Error loading student embedding for {self.user_id}: {str(e)}", exc_info=True)
+            logger.error(f"❌ Error loading student embedding for {self.user_id}: {str(e)}", exc_info=True)
             return None
     
     @database_sync_to_async
@@ -520,9 +531,13 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
         """Check if student already marked attendance for this session."""
         try:
             from attendance.models import Attendance, AttendanceSession
+            from accounts.models import StudentProfile
+            
             session = AttendanceSession.objects.get(id=UUID(self.attendance_session_id))
+            student_profile = StudentProfile.objects.get(user_id=self.user_id)
+            
             return Attendance.objects.filter(
-                student=self.student_profile,
+                student=student_profile,
                 attendance_session=session
             ).exists()
         except Exception as e:
@@ -597,12 +612,14 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
         """Mark student as present in attendance session."""
         try:
             from attendance.models import AttendanceSession, Attendance
+            from accounts.models import StudentProfile
             
             session = AttendanceSession.objects.get(id=UUID(self.attendance_session_id))
+            student_profile = StudentProfile.objects.get(user_id=self.user_id)
             
             # Create attendance record (will fail if already exists due to unique constraint)
             attendance, created = Attendance.objects.get_or_create(
-                student=self.student_profile,
+                student=student_profile,
                 attendance_session=session,
                 defaults={
                     'class_session': session.class_session,
