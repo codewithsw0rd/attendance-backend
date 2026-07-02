@@ -319,58 +319,82 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
     
     async def connect(self):
         """Handle WebSocket connection for student attendance streaming."""
-        self.attendance_session_id = self.scope['url_route']['kwargs']['session_id']
-        self.session_group_name = f'student_attendance_{self.attendance_session_id}'
-        user = self.scope['user']
-        
-        if not user.is_authenticated:
-            logger.warning(f"WebSocket auth failed for student attendance {self.attendance_session_id}")
-            await self.close(code=4003)
-            return
-        
-        if user.user_type != UserType.STUDENT:
-            logger.warning(f"Non-student {user.id} tried to stream attendance")
-            await self.close(code=4003)
-            return
-        
-        # Verify attendance session exists and is active
-        session_data = await self.get_session_data()
-        if not session_data:
-            await self.close(code=4004)
-            return
-        
-        self.user_id = str(user.id)
-        self.student_profile = user.studentprofile
-        self.attendance_session = session_data
-        
         try:
-            await self.channel_layer.group_add(self.session_group_name, self.channel_name)
+            self.attendance_session_id = self.scope['url_route']['kwargs']['session_id']
+            self.session_group_name = f'student_attendance_{self.attendance_session_id}'
+            logger.info(f"📡 Connect attempt for session: {self.attendance_session_id}")
+            
+            user = self.scope['user']
+            logger.info(f"User authenticated: {user.is_authenticated}, type: {getattr(user, 'user_type', 'N/A')}")
+            
+            if not user.is_authenticated:
+                logger.warning(f"❌ WebSocket auth failed for student attendance {self.attendance_session_id}")
+                await self.close(code=4003)
+                return
+            
+            if user.user_type != UserType.STUDENT:
+                logger.warning(f"❌ Non-student {user.id} tried to stream attendance")
+                await self.close(code=4003)
+                return
+            
+            # Verify attendance session exists and is active
+            logger.info(f"🔍 Verifying attendance session...")
+            session_data = await self.get_session_data()
+            if not session_data:
+                logger.warning(f"❌ Session data not found or session already ended")
+                await self.close(code=4004)
+                return
+            
+            self.user_id = str(user.id)
+            logger.info(f"✅ User ID set: {self.user_id}")
+            
+            # Get student profile safely
+            try:
+                self.student_profile = user.studentprofile
+                logger.info(f"✅ Student profile loaded")
+            except AttributeError:
+                logger.error(f"❌ Student {self.user_id} has no StudentProfile")
+                await self.close(code=4004)
+                return
+            
+            self.attendance_session = session_data
+            
+            try:
+                await self.channel_layer.group_add(self.session_group_name, self.channel_name)
+                logger.info(f"✅ Joined channel group")
+            except Exception as e:
+                logger.error(f"❌ Channel layer error: {str(e)}")
+                await self.close(code=1011)
+                return
+            
+            # Load student's own face embeddings
+            logger.info(f"🔍 Loading student face embeddings...")
+            self._student_embedding = await self._load_student_embedding()
+            logger.info(f"Face embedding loaded: {self._student_embedding is not None}")
+            
+            self._frame_count = 0
+            self._frame_lock = asyncio.Lock()
+            
+            await self.accept()
+            logger.info(f"✅ Connection accepted")
+            
+            logger.info(f"✅ Student {self.user_id} connected to attendance stream for session {self.attendance_session_id}")
+            await self.send(json.dumps({
+                'type': 'connection_established',
+                'session_id': str(self.attendance_session_id),
+                'message': 'Connected. Streaming frames for attendance detection...',
+                'has_face_registered': self._student_embedding is not None
+            }))
         except Exception as e:
-            logger.error(f"Channel layer error: {str(e)}")
+            logger.error(f"❌ Error in StudentAttendanceStreamConsumer.connect: {str(e)}", exc_info=True)
             await self.close(code=1011)
-            return
-        
-        # Load student's own face embeddings
-        self._student_embedding = await self._load_student_embedding()
-        self._frame_count = 0
-        self._frame_lock = asyncio.Lock()
-        
-        await self.accept()
-        
-        logger.info(f"Student {self.user_id} connected to attendance stream for session {self.attendance_session_id}")
-        await self.send(json.dumps({
-            'type': 'connection_established',
-            'session_id': str(self.attendance_session_id),
-            'message': 'Connected. Streaming frames for attendance detection...',
-            'has_face_registered': self._student_embedding is not None
-        }))
     
     async def receive(self, text_data=None, bytes_data=None):
         """Receive and process video frame from student."""
-        if self._frame_lock.locked():
-            return
-        
         try:
+            if not hasattr(self, '_frame_lock') or self._frame_lock.locked():
+                return
+            
             frame_io = None
             
             if text_data:
@@ -434,7 +458,7 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
             }))
         
         except Exception as e:
-            logger.error(f"Frame processing error for student {self.user_id}: {str(e)}")
+            logger.error(f"Frame processing error for student {getattr(self, 'user_id', 'unknown')}: {str(e)}", exc_info=True)
             await self.send(json.dumps({'type': 'error', 'detail': str(e)}))
     
     async def disconnect(self, close_code):
@@ -451,17 +475,22 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
         """Verify attendance session exists and is active."""
         try:
             from attendance.models import AttendanceSession
+            logger.info(f"Looking up attendance session: {self.attendance_session_id}")
             session = AttendanceSession.objects.select_related('class_session__subject').get(
                 id=UUID(self.attendance_session_id),
                 ended_at=None  # Session must still be active
             )
+            logger.info(f"✅ Session found: {session.id}")
             return {
                 'id': str(session.id),
                 'class_session_id': str(session.class_session.id),
                 'subject_id': str(session.class_session.subject.id),
             }
+        except AttendanceSession.DoesNotExist:
+            logger.error(f"Attendance session not found: {self.attendance_session_id}")
+            return None
         except Exception as e:
-            logger.error(f"Session lookup error: {str(e)}")
+            logger.error(f"Session lookup error for {self.attendance_session_id}: {str(e)}", exc_info=True)
             return None
     
     @database_sync_to_async
@@ -475,10 +504,15 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
             # Get average embedding or first one
             embeddings = list(face_data.embeddings.all())
             if embeddings:
+                logger.info(f"✅ Found {len(embeddings)} enrollments for student {self.user_id}")
                 return embeddings[0].embedding  # Use first enrolled embedding
+            logger.warning(f"⚠️ No embeddings found for student {self.user_id}")
+            return None
+        except FaceData.DoesNotExist:
+            logger.warning(f"⚠️ No face data registered for student {self.user_id}")
             return None
         except Exception as e:
-            logger.error(f"Error loading student embedding for {self.user_id}: {str(e)}")
+            logger.error(f"Error loading student embedding for {self.user_id}: {str(e)}", exc_info=True)
             return None
     
     @database_sync_to_async
@@ -609,45 +643,49 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
     
     async def connect(self):
         """Handle WebSocket connection for student notifications."""
-        user = self.scope['user']
-        
-        # Check authentication
-        if not user.is_authenticated:
-            logger.warning("WebSocket auth failed for notifications")
-            await self.close(code=4003)
-            return
-        
-        # Check user type
-        if user.user_type != UserType.STUDENT:
-            logger.warning(f"Non-student user {user.id} tried to connect to notifications")
-            await self.close(code=4003)
-            return
-        
-        self.user_id = str(user.id)
-        self.student_group = f'student_notifications_{self.user_id}'
-        self.session_groups = []
-        
-        # Join personal notification group
         try:
-            await self.channel_layer.group_add(self.student_group, self.channel_name)
+            user = self.scope['user']
+            
+            # Check authentication
+            if not user.is_authenticated:
+                logger.warning("WebSocket auth failed for notifications")
+                await self.close(code=4003)
+                return
+            
+            # Check user type
+            if user.user_type != UserType.STUDENT:
+                logger.warning(f"Non-student user {user.id} tried to connect to notifications")
+                await self.close(code=4003)
+                return
+            
+            self.user_id = str(user.id)
+            self.student_group = f'student_notifications_{self.user_id}'
+            self.session_groups = []
+            
+            # Join personal notification group
+            try:
+                await self.channel_layer.group_add(self.student_group, self.channel_name)
+            except Exception as e:
+                logger.error(f"Error joining personal group: {str(e)}")
+                await self.close(code=1011)
+                return
+            
+            # Join groups for all enrolled classes
+            await self._join_enrolled_class_groups()
+            
+            await self.accept()
+            
+            logger.info(f"Student {self.user_id} connected to notifications. "
+                       f"Joined {len(self.session_groups)} session groups")
+            
+            await self.send(json.dumps({
+                'type': 'connection_established',
+                'message': 'Connected to real-time notifications',
+                'enrolled_classes': len(self.session_groups)
+            }))
         except Exception as e:
-            logger.error(f"Error joining personal group: {str(e)}")
+            logger.error(f"Error in StudentNotificationConsumer.connect: {str(e)}", exc_info=True)
             await self.close(code=1011)
-            return
-        
-        # Join groups for all enrolled classes
-        await self._join_enrolled_class_groups()
-        
-        await self.accept()
-        
-        logger.info(f"Student {self.user_id} connected to notifications. "
-                   f"Joined {len(self.session_groups)} session groups")
-        
-        await self.send(json.dumps({
-            'type': 'connection_established',
-            'message': 'Connected to real-time notifications',
-            'enrolled_classes': len(self.session_groups)
-        }))
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection."""
