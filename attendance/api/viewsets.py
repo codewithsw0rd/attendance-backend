@@ -702,7 +702,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def class_attendance(self, request):
-        """Get attendance for a specific class session (teacher only)"""
+        """Get attendance for a specific attendance session (teacher only)"""
         if request.user.user_type != UserType.TEACHER:
             return Response(
                 {'detail': 'Only teachers can access class attendance'},
@@ -717,29 +717,35 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            session = ClassSession.objects.get(
-                id=session_id,
-                subject__teacher__user=request.user
-            )
+            # Get the AttendanceSession (which has the UUID id)
+            attendance_session = AttendanceSession.objects.get(id=session_id)
+            
+            # Verify teacher owns this session's class
+            if attendance_session.class_session.subject.teacher.user != request.user:
+                return Response(
+                    {'detail': 'Access denied'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
             attendances = Attendance.objects.filter(
-                class_session=session
+                attendance_session=attendance_session
             ).order_by('student__roll_number')
             
             serializer = AttendanceReadSerializer(attendances, many=True)
             return Response(serializer.data)
-        except ClassSession.DoesNotExist:
+        except AttendanceSession.DoesNotExist:
             return Response(
-                {'detail': 'Class session not found or access denied'},
+                {'detail': 'Attendance session not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
     
     @extend_schema(
         responses={200: SessionSummarySerializer},
-        description="Get attendance summary for a class session including total students, present/absent counts, and attendance rate. Teacher only. Requires 'session_id' query parameter."
+        description="Get attendance summary for an attendance session including total students, present/absent counts, and attendance rate. Teacher only. Requires 'session_id' query parameter."
     )
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def session_summary(self, request):
-        """Get attendance summary for a class session (teacher only)"""
+        """Get attendance summary for an attendance session (teacher only)"""
         if request.user.user_type != UserType.TEACHER:
             return Response(
                 {'detail': 'Only teachers can access class attendance'},
@@ -754,37 +760,42 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            session = ClassSession.objects.get(
-                id=session_id,
-                subject__teacher__user=request.user
-            )
+            # Get the AttendanceSession (which has UUID id)
+            attendance_session = AttendanceSession.objects.get(id=session_id)
+            
+            # Verify teacher owns this session
+            if attendance_session.class_session.subject.teacher.user != request.user:
+                return Response(
+                    {'detail': 'Access denied'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
             
             total_students = Enrollment.objects.filter(
-                subject=session.subject
+                subject=attendance_session.class_session.subject
             ).count()
             
             present_count = Attendance.objects.filter(
-                class_session=session,
+                attendance_session=attendance_session,
                 status='PRESENT'
             ).count()
             
             absent_count = Attendance.objects.filter(
-                class_session=session,
+                attendance_session=attendance_session,
                 status='ABSENT'
             ).count()
             
             return Response({
-                'session_id': str(session.id),
-                'class_name': session.class_name,
-                'date': session.date,
+                'session_id': str(attendance_session.id),
+                'class_name': attendance_session.class_session.class_name,
+                'date': attendance_session.session_date,
                 'total_students': total_students,
                 'present': present_count,
                 'absent': absent_count,
                 'attendance_rate': (present_count / total_students * 100) if total_students > 0 else 0
             })
-        except ClassSession.DoesNotExist:
+        except AttendanceSession.DoesNotExist:
             return Response(
-                {'detail': 'Class session not found or access denied'},
+                {'detail': 'Attendance session not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
