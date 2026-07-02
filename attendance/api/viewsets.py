@@ -827,7 +827,16 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         try:
             if template_id:
                 # Template-based recurring session
-                template = ClassSessionTemplate.objects.get(id=template_id)
+                # Parse template_id as integer (comes from frontend as string)
+                try:
+                    template_id_int = int(template_id)
+                except (ValueError, TypeError):
+                    return Response(
+                        {'detail': f'Invalid template_id: must be an integer, got "{template_id}"'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                template = ClassSessionTemplate.objects.get(id=template_id_int)
                 
                 # Verify teacher teaches this subject
                 if template.subject.teacher.user != request.user:
