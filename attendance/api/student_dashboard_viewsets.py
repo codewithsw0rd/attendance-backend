@@ -586,8 +586,9 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 subject = template.subject
                 
                 # Check if teacher has active session for this template today
+                # Use template_id (BigInt) directly to avoid UUID type mismatch
                 active_session = AttendanceSession.objects.filter(
-                    template=template,
+                    template_id=template.id,  # Use _id to pass the PK directly
                     session_date=today,
                     ended_at__isnull=True
                 ).first()
