@@ -368,3 +368,287 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 {'detail': f'Error fetching attendance history: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=False, methods=['get'])
+    def enrolled_subjects(self, request):
+        """
+        Get list of all enrolled subjects for current student.
+        
+        Returns array of:
+            - subject_id: Subject ID
+            - subject_name: Subject name
+            - subject_code: Subject code
+            - teacher_name: Teacher name
+            - teacher_email: Teacher email
+            - department: Department
+            - semester: Semester
+            - total_classes: Total classes in this subject
+            - classes_attended: Attended in this subject
+            - classes_missed: Missed in this subject
+            - attendance_rate: Attendance % for this subject
+        """
+        try:
+            if request.user.user_type != UserType.STUDENT:
+                return Response(
+                    {'detail': 'Only students can access their subjects'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Get student's enrollments
+            enrollments = Enrollment.objects.filter(
+                student__user=request.user
+            ).select_related('subject', 'subject__teacher', 'subject__teacher__user')
+            
+            subjects_data = []
+            
+            for enrollment in enrollments:
+                subject = enrollment.subject
+                
+                # Get attendance for this subject
+                subject_attendance = Attendance.objects.filter(
+                    student__user=request.user,
+                    class_session__subject=subject
+                )
+                
+                total = subject_attendance.count()
+                attended = subject_attendance.filter(status='PRESENT').count()
+                missed = subject_attendance.filter(status='ABSENT').count()
+                rate = (attended / total * 100) if total > 0 else 0
+                
+                # Get teacher info
+                teacher_name = ''
+                teacher_email = ''
+                if subject.teacher and subject.teacher.user:
+                    teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                    if not teacher_name:
+                        teacher_name = subject.teacher.user.email
+                    teacher_email = subject.teacher.user.email
+                
+                subjects_data.append({
+                    'subject_id': str(subject.id),
+                    'subject_name': subject.name,
+                    'subject_code': subject.code,
+                    'teacher_name': teacher_name,
+                    'teacher_email': teacher_email,
+                    'department': subject.department,
+                    'semester': subject.semester,
+                    'total_classes': total,
+                    'classes_attended': attended,
+                    'classes_missed': missed,
+                    'attendance_rate': round(rate, 2),
+                })
+            
+            return Response(subjects_data, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            return Response(
+                {'detail': f'Error fetching enrolled subjects: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def subject_detail(self, request):
+        """
+        Get detailed attendance information for a specific subject.
+        
+        Query Parameters:
+            - subject_id: Subject ID (required)
+            - search: Search by class name or topic (optional)
+            - status: Filter by PRESENT or ABSENT (optional)
+            - sort_by: date|status (default: date)
+            - sort_order: asc|desc (default: desc)
+            - page: Page number (default: 1)
+            - page_size: Items per page (default: 10)
+        
+        Returns:
+            - subject: Subject details
+            - stats: Attendance statistics for this subject
+            - sessions: Paginated list of sessions with attendance
+        """
+        try:
+            if request.user.user_type != UserType.STUDENT:
+                return Response(
+                    {'detail': 'Only students can access subject details'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            subject_id = request.query_params.get('subject_id', '').strip()
+            if not subject_id:
+                return Response(
+                    {'detail': 'subject_id parameter is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get query parameters
+            search_query = request.query_params.get('search', '').strip()
+            status_filter = request.query_params.get('status', '').strip()
+            sort_by = request.query_params.get('sort_by', 'date')
+            sort_order = request.query_params.get('sort_order', 'desc')
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 10))
+            
+            # Verify student is enrolled in this subject
+            enrollment = Enrollment.objects.filter(
+                student__user=request.user,
+                subject_id=subject_id
+            ).select_related('subject', 'subject__teacher', 'subject__teacher__user').first()
+            
+            if not enrollment:
+                return Response(
+                    {'detail': 'You are not enrolled in this subject'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            subject = enrollment.subject
+            
+            # Get teacher name
+            teacher_name = ''
+            if subject.teacher and subject.teacher.user:
+                teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                if not teacher_name:
+                    teacher_name = subject.teacher.user.email
+            
+            # Get all attendance for this subject
+            subject_attendance = Attendance.objects.filter(
+                student__user=request.user,
+                class_session__subject=subject
+            ).select_related('class_session')
+            
+            # Calculate stats
+            total = subject_attendance.count()
+            attended = subject_attendance.filter(status='PRESENT').count()
+            missed = subject_attendance.filter(status='ABSENT').count()
+            rate = (attended / total * 100) if total > 0 else 0
+            
+            # Build filtered queryset
+            queryset = subject_attendance
+            
+            # Apply search filter
+            if search_query:
+                queryset = queryset.filter(
+                    Q(class_session__class_name__icontains=search_query)
+                )
+            
+            # Apply status filter
+            if status_filter and status_filter in ['PRESENT', 'ABSENT']:
+                queryset = queryset.filter(status=status_filter)
+            
+            # Apply sorting
+            reverse_sort = sort_order.lower() == 'desc'
+            
+            if sort_by == 'status':
+                queryset = queryset.order_by(
+                    f"{'-' if reverse_sort else ''}status"
+                )
+            else:  # date (default)
+                queryset = queryset.order_by(
+                    f"{'-' if reverse_sort else ''}marked_at"
+                )
+            
+            # Get total count before pagination
+            total_count = queryset.count()
+            
+            # Apply pagination
+            total_pages = (total_count + page_size - 1) // page_size
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            paginated_sessions = queryset[start_idx:end_idx]
+            
+            # Build session data
+            sessions_data = []
+            for attendance in paginated_sessions:
+                sessions_data.append({
+                    'date': attendance.marked_at.date().isoformat(),
+                    'class_name': attendance.class_session.class_name,
+                    'status': attendance.status,
+                    'detection_confidence': round(attendance.detection_confidence, 3),
+                })
+            
+            return Response({
+                'subject': {
+                    'id': str(subject.id),
+                    'name': subject.name,
+                    'code': subject.code,
+                    'teacher_name': teacher_name,
+                    'department': subject.department,
+                    'semester': subject.semester,
+                },
+                'stats': {
+                    'total_classes': total,
+                    'classes_attended': attended,
+                    'classes_missed': missed,
+                    'attendance_rate': round(rate, 2),
+                },
+                'sessions': sessions_data,
+                'pagination': {
+                    'current_page': page,
+                    'page_size': page_size,
+                    'total_count': total_count,
+                    'total_pages': total_pages,
+                },
+            }, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            return Response(
+                {'detail': f'Error fetching subject details: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def profile(self, request):
+        """
+        Get student profile information including academic details.
+        
+        Returns:
+            - Personal info: Email, name, phone, address
+            - Academic info: Department, year, roll number
+            - Enrollment count
+            - Face enrollment status
+        """
+        try:
+            if request.user.user_type != UserType.STUDENT:
+                return Response(
+                    {'detail': 'Only students can access their profile'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            student = request.user.studentprofile
+            
+            # Get enrollment count
+            enrollment_count = Enrollment.objects.filter(
+                student=student
+            ).count()
+            
+            # Get face enrollment status
+            face_data = getattr(student, 'face_data', None)
+            face_enrolled = False
+            face_photos = 0
+            face_confidence = 0.0
+            
+            if face_data:
+                face_enrolled = face_data.is_enrolled
+                face_photos = face_data.total_photos_registered
+                face_confidence = face_data.registration_confidence
+            
+            return Response({
+                'id': str(request.user.id),
+                'email': request.user.email,
+                'first_name': request.user.first_name or '',
+                'last_name': request.user.last_name or '',
+                'phone_no': student.phone_no or '',
+                'address': student.address or '',
+                'roll_number': student.roll_number,
+                'department': student.department or '',
+                'year': student.year,
+                'is_active': request.user.is_active,
+                'enrollment_count': enrollment_count,
+                'face_enrolled': face_enrolled,
+                'face_photos': face_photos,
+                'face_confidence': round(face_confidence, 3),
+            }, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            return Response(
+                {'detail': f'Error fetching profile: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
