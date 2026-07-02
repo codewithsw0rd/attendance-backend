@@ -71,11 +71,24 @@ class AttendanceSession(BaseModel):
     
     def __str__(self):
         return f"Session for {self.class_session.class_name} ({self.started_at})"
+    
+    def is_active(self):
+        """Check if session is currently active (started but not ended)"""
+        return self.ended_at is None
+    
+    def can_student_mark_attendance(self):
+        """Check if session is active and allows student self-marking"""
+        return self.is_active()
 
 class Attendance(BaseModel):
     PRESENCE_CHOICES = [
         ('PRESENT', 'Present'),
         ('ABSENT', 'Absent'),
+    ]
+    INITIATED_BY_CHOICES = [
+        ('student', 'Student Self-Service'),
+        ('teacher', 'Teacher Batch Session'),
+        ('manual', 'Admin Manual Override'),
     ]
     
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='attendances')
@@ -91,6 +104,22 @@ class Attendance(BaseModel):
     status = models.CharField(max_length=10, choices=PRESENCE_CHOICES, default='ABSENT')
     marked_at = models.DateTimeField(auto_now_add=True)
 
+    # NEW: Track who initiated this attendance record
+    initiated_by = models.CharField(
+        max_length=20,
+        choices=INITIATED_BY_CHOICES,
+        default='teacher',
+        help_text="Whether attendance was self-marked by student or teacher-marked"
+    )
+    initiated_by_user = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='initiated_attendance_records',
+        help_text="Teacher or admin who initiated this record (if applicable)"
+    )
+
     frame_detected = models.DateTimeField(
         null=True,
         blank=True,
@@ -100,26 +129,35 @@ class Attendance(BaseModel):
         default=0.0,
         help_text="Face recognition confidence score (0-1) from ML service"
     )
+    attempt_count = models.IntegerField(
+        default=1,
+        help_text="Number of attempts student made to mark attendance"
+    )
     
     class Meta:
         ordering = ['-marked_at']
         constraints = [
-            # Prevent duplicate attendance within same session
+            # Prevent duplicate attendance within same teacher session
             models.UniqueConstraint(
                 fields=['student', 'attendance_session'],
                 condition=models.Q(attendance_session__isnull=False),
                 name='unique_attendance_per_session'
             ),
-            # Keep old constraint for backward compatibility with manual marking
+            # Allow one student-initiated and one teacher-initiated per class_session
             models.UniqueConstraint(
-                fields=['student', 'class_session'],
-                condition=models.Q(attendance_session__isnull=True),
-                name='unique_attendance_manual_marking'
+                fields=['student', 'class_session', 'initiated_by'],
+                condition=models.Q(initiated_by='student'),
+                name='unique_student_initiated_per_class_session'
+            ),
+            models.UniqueConstraint(
+                fields=['student', 'class_session', 'initiated_by'],
+                condition=models.Q(initiated_by='manual'),
+                name='unique_manual_per_class_session'
             )
         ]
     
     def __str__(self):
-        return f"{self.student.user.email} - {self.class_session.class_name} - {self.status}"
+        return f"{self.student.user.email} - {self.class_session.class_name} - {self.status} ({self.initiated_by})"
 
 
 class AttendanceLog(BaseModel):

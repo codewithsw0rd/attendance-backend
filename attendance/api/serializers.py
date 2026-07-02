@@ -100,6 +100,17 @@ class AttendanceMarkRequestSerializer(serializers.Serializer):
     )
 
 
+class AttendanceSelfMarkRequestSerializer(serializers.Serializer):
+    """Request schema for student self-marking attendance"""
+    image = serializers.FileField(required=True, help_text="Face image file for recognition")
+    class_session_id = serializers.UUIDField(required=True, help_text="UUID of the class session")
+    latitude = serializers.FloatField(required=False, allow_null=True, help_text="GPS latitude")
+    longitude = serializers.FloatField(required=False, allow_null=True, help_text="GPS longitude")
+    distance_from_classroom = serializers.FloatField(required=False, allow_null=True, help_text="Distance from classroom")
+    liveness_passed = serializers.CharField(required=False, allow_null=True, help_text="Liveness check: PASS/FAIL/UNKNOWN")
+    timestamp_signed = serializers.CharField(required=False, allow_null=True, help_text="Signed timestamp")
+
+
 class AttendanceMarkResponseSerializer(serializers.Serializer):
     """Response schema for marking attendance"""
     attendance_id = serializers.UUIDField(help_text="Unique attendance record ID")

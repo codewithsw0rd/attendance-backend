@@ -4,9 +4,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
 from datetime import datetime, timedelta
+from django.utils import timezone
 from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
-from ..models import Attendance
+from ..models import Attendance, AttendanceSession
 
 
 class StudentDashboardViewSet(viewsets.ViewSet):
@@ -531,5 +532,109 @@ class StudentDashboardViewSet(viewsets.ViewSet):
         except Exception as e:
             return Response(
                 {'detail': f'Error fetching profile: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def todays_classes(self, request):
+        """
+        Get today's classes with session status for student.
+        
+        Status meanings:
+        - 'upcoming': Class hasn't started yet (start_time > now)
+        - 'running': Teacher has active session (now between start and end time)
+        - 'completed': Class time has ended
+        
+        Returns list with detailed session info and attendance status.
+        """
+        try:
+            if not self._check_student(request):
+                return Response(
+                    {'detail': 'Only students can access this'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            today = timezone.now().date()
+            now = timezone.now()
+            enrolled_subjects = Enrollment.objects.filter(
+                student__user=request.user
+            ).values_list('subject_id', flat=True)
+            
+            # Get today's classes for enrolled subjects
+            todays_sessions = ClassSession.objects.filter(
+                subject_id__in=enrolled_subjects,
+                date=today
+            ).select_related(
+                'subject',
+                'subject__teacher',
+                'subject__teacher__user'
+            ).order_by('start_time')
+            
+            classes_data = []
+            
+            for session in todays_sessions:
+                subject = session.subject
+                
+                # Check if teacher has active session
+                active_session = AttendanceSession.objects.filter(
+                    class_session=session,
+                    ended_at__isnull=True
+                ).first()
+                
+                # Check if student already marked attendance
+                student_attendance = Attendance.objects.filter(
+                    student__user=request.user,
+                    class_session=session,
+                    initiated_by='student'
+                ).first()
+                
+                # Determine session status
+                class_start = timezone.datetime.combine(today, session.start_time)
+                class_end = timezone.datetime.combine(today, session.end_time)
+                
+                # Convert to timezone-aware if needed
+                if timezone.is_naive(class_start):
+                    class_start = timezone.make_aware(class_start)
+                if timezone.is_naive(class_end):
+                    class_end = timezone.make_aware(class_end)
+                
+                # Add 5 min grace period to end time
+                class_end_with_grace = class_end + timezone.timedelta(minutes=5)
+                
+                if now < class_start:
+                    session_status = 'upcoming'
+                elif now > class_end_with_grace:
+                    session_status = 'completed'
+                else:
+                    session_status = 'running'
+                
+                # Session is running AND teacher has started
+                is_session_running = session_status == 'running' and active_session is not None
+                
+                classes_data.append({
+                    'id': str(session.id),
+                    'class_name': session.class_name,
+                    'subject_id': str(subject.id),
+                    'subject_name': subject.name,
+                    'subject_code': subject.code,
+                    'date': session.date.isoformat(),
+                    'start_time': session.start_time.isoformat(),
+                    'end_time': session.end_time.isoformat(),
+                    'teacher_name': self._get_teacher_name(subject.teacher),
+                    'teacher_id': str(subject.teacher.user.id) if subject.teacher else '',
+                    'session_status': session_status,  # 'upcoming', 'running', 'completed'
+                    'is_session_active': active_session is not None,  # Teacher started?
+                    'can_mark_attendance': is_session_running,  # Can student mark NOW?
+                    'has_marked_attendance': student_attendance is not None,
+                    'attendance_id': str(student_attendance.id) if student_attendance else None,
+                    'attendance_confidence': round(student_attendance.detection_confidence, 3) if student_attendance else None,
+                    'attendance_status': student_attendance.status if student_attendance else None,
+                })
+            
+            return Response(classes_data, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            return Response(
+                {'detail': f'Error fetching today\'s classes: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
