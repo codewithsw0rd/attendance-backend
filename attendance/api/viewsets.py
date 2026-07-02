@@ -776,10 +776,14 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         
         # Create new session
         from ..models import AttendanceSession
+        from django.utils import timezone
+        
         session = AttendanceSession.objects.create(
             class_session=class_session,
             initiated_by=request.user,
-            marked_students=[]
+            marked_students=[],
+            session_date=timezone.now().date(),  # Explicitly set session date
+            session_time=class_session.start_time,  # Set session time from class
         )
         
         # Broadcast session started notification to all enrolled students
