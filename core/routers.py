@@ -21,6 +21,7 @@ router.register('class-sessions', ClassSessionViewSet, basename='class-sessions'
 
 #-----------------------------------FACE RECOGNITION & ATTENDANCE-----------------------------------------------------
 router.register('face-data', FaceDataViewSet, basename='face-data')
+router.register('class-session-templates', ClassSessionTemplateViewSet, basename='class-session-templates')
 router.register('attendance', AttendanceViewSet, basename='attendance')
 router.register('attendance-logs', AttendanceLogViewSet, basename='attendance-logs')
 

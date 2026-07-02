@@ -6,14 +6,14 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.http import HttpResponse
 from accounts.models import UserType
 from academics.models import Enrollment, ClassSession
-from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog, AttendanceSession
+from ..models import FaceData, FaceEmbedding, Attendance, AttendanceLog, AttendanceSession, ClassSessionTemplate
 from ..filters import FaceDataFilter, FaceEmbeddingFilter, AttendanceFilter, AttendanceLogFilter
 from rest_framework import serializers
 from .serializers import (
     FaceDataSerializer, AttendanceSerializer, AttendanceReadSerializer, AttendanceLogSerializer,
     AttendanceMarkRequestSerializer, AttendanceSelfMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer, 
     SessionEndResponseSerializer, AttendanceSessionSerializer,
-    StartSessionRequestSerializer, EndSessionRequestSerializer
+    StartSessionRequestSerializer, EndSessionRequestSerializer, ClassSessionTemplateSerializer, CreateClassSessionTemplateSerializer
 )
 from core.utils.custom_perms import IsClientUser
 from core.utils.sort import apply_sorting
@@ -72,6 +72,63 @@ class FaceDataViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+
+
+class ClassSessionTemplateViewSet(viewsets.ModelViewSet):
+    """
+    Manage recurring class session templates.
+    Teachers can create, update, and list templates for their subjects.
+    """
+    queryset = ClassSessionTemplate.objects.all()
+    serializer_class = ClassSessionTemplateSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Teachers see only their own templates. Admins see all."""
+        user = self.request.user
+        if user.user_type == UserType.TEACHER:
+            return ClassSessionTemplate.objects.filter(subject__teacher__user=user)
+        return ClassSessionTemplate.objects.all()
+    
+    def get_serializer_class(self):
+        """Use different serializer for create/update"""
+        if self.action in ['create', 'update', 'partial_update']:
+            return CreateClassSessionTemplateSerializer
+        return ClassSessionTemplateSerializer
+    
+    def perform_create(self, serializer):
+        """Ensure teacher can only create templates for their subjects"""
+        subject = serializer.validated_data['subject']
+        user = self.request.user
+        
+        # Verify teacher owns this subject
+        if user.user_type == UserType.TEACHER and subject.teacher.user != user:
+            raise serializers.ValidationError("You can only create templates for your own subjects")
+        
+        serializer.save()
+    
+    @action(detail=False, methods=['get'])
+    def my_templates(self, request):
+        """Get all templates for logged-in teacher's subjects"""
+        if request.user.user_type != UserType.TEACHER:
+            return Response(
+                {'detail': 'Only teachers can view their templates'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        templates = self.get_queryset()
+        serializer = ClassSessionTemplateSerializer(templates, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'])
+    def todays_sessions(self, request):
+        """Get all templates scheduled for today"""
+        from django.utils import timezone
+        today_weekday = timezone.now().weekday()
+        
+        templates = self.get_queryset().filter(day_of_week=today_weekday, is_active=True)
+        serializer = ClassSessionTemplateSerializer(templates, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class AttendanceViewSet(viewsets.ModelViewSet):
@@ -743,7 +800,9 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         Only teachers can initiate sessions for their classes.
         
         Request (JSON):
-            - class_session_id: UUID of the class session
+            - template_id: UUID of the ClassSessionTemplate (for recurring sessions)
+            OR
+            - class_session_id: UUID of a ClassSession (for one-off sessions, legacy)
         
         Response: AttendanceSession details with session ID for WebSocket connection
         """
@@ -753,48 +812,94 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         
+        from ..models import AttendanceSession, ClassSessionTemplate
+        from django.utils import timezone
+        
+        template_id = request.data.get('template_id')
         class_session_id = request.data.get('class_session_id')
-        if not class_session_id:
+        
+        if not template_id and not class_session_id:
             return Response(
-                {'detail': 'class_session_id required'},
+                {'detail': 'Either template_id or class_session_id required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            class_session = ClassSession.objects.get(id=class_session_id)
-            # Verify teacher teaches this class
-            if class_session.subject.teacher.user != request.user:
-                return Response(
-                    {'detail': 'You do not teach this class'},
-                    status=status.HTTP_403_FORBIDDEN
+            if template_id:
+                # Template-based recurring session
+                template = ClassSessionTemplate.objects.get(id=template_id)
+                
+                # Verify teacher teaches this subject
+                if template.subject.teacher.user != request.user:
+                    return Response(
+                        {'detail': 'You do not teach this subject'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                # Create/get ClassSession for today based on template
+                today = timezone.now().date()
+                class_session, _ = ClassSession.objects.get_or_create(
+                    subject=template.subject,
+                    date=today,
+                    defaults={
+                        'class_name': f"{template.subject.code} - {template.get_day_of_week_display()}",
+                        'start_time': template.start_time,
+                        'end_time': template.end_time,
+                        'template': template,
+                    }
                 )
+                
+                # Create new AttendanceSession linked to template
+                session = AttendanceSession.objects.create(
+                    template=template,
+                    class_session=class_session,
+                    initiated_by=request.user,
+                    marked_students=[],
+                    session_date=today,
+                    session_time=template.start_time,
+                )
+                
+                # Broadcast to all students enrolled in this subject
+                group_name = f'subject_students_{template.subject.id}'
+                
+            else:
+                # Legacy: ClassSession-based session
+                class_session = ClassSession.objects.get(id=class_session_id)
+                
+                # Verify teacher teaches this class
+                if class_session.subject.teacher.user != request.user:
+                    return Response(
+                        {'detail': 'You do not teach this class'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                session = AttendanceSession.objects.create(
+                    class_session=class_session,
+                    initiated_by=request.user,
+                    marked_students=[],
+                    session_date=timezone.now().date(),
+                    session_time=class_session.start_time,
+                )
+                
+                group_name = f'session_students_{class_session.id}'
+        
+        except ClassSessionTemplate.DoesNotExist:
+            return Response(
+                {'detail': 'Template not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except ClassSession.DoesNotExist:
             return Response(
                 {'detail': 'Class session not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Create new session
-        from ..models import AttendanceSession
-        from django.utils import timezone
-        
-        session = AttendanceSession.objects.create(
-            class_session=class_session,
-            initiated_by=request.user,
-            marked_students=[],
-            session_date=timezone.now().date(),  # Explicitly set session date
-            session_time=class_session.start_time,  # Set session time from class
-        )
-        
-        # Broadcast session started notification to all enrolled students
-        from channels.layers import get_channel_layer
-        from asgiref.sync import async_to_sync
-        import json
-        
-        channel_layer = get_channel_layer()
-        group_name = f'session_students_{class_session.id}'
-        
+        # Broadcast session started notification
         try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            
+            channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
                 group_name,
                 {
@@ -803,12 +908,13 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                     'class_session_id': str(class_session.id),
                     'subject_code': class_session.subject.code,
                     'subject_name': class_session.subject.name,
-                    'template_id': str(class_session.template.id) if class_session.template else None,
+                    'template_id': str(session.template.id) if session.template else None,
                 }
             )
         except Exception as e:
             print(f"Error broadcasting session_started: {str(e)}")
         
+        from .serializers import AttendanceSessionSerializer
         serializer = AttendanceSessionSerializer(session)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 

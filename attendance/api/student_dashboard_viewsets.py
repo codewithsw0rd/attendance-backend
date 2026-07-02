@@ -540,9 +540,12 @@ class StudentDashboardViewSet(viewsets.ViewSet):
         """
         Get today's classes with session status for student.
         
+        Queries ClassSessionTemplate (recurring) for today's day of week.
+        Auto-generates sessions based on template schedule.
+        
         Status meanings:
         - 'upcoming': Class hasn't started yet (start_time > now)
-        - 'running': Time window is during class (between start and end+5min), AND teacher must have started session
+        - 'running': Time window is during class (between start and end), AND teacher has started session
         - 'completed': Class time has ended
         
         Returns list with detailed session info and attendance status.
@@ -556,6 +559,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             
             today = timezone.now().date()
             now = timezone.now()
+            today_weekday = today.weekday()  # 0=Monday, 6=Sunday
             student = request.user.studentprofile
             
             # Get student's enrolled subjects
@@ -563,37 +567,42 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 student=student
             ).values_list('subject_id', flat=True)
             
-            # Get today's classes for enrolled subjects
-            todays_sessions = ClassSession.objects.filter(
+            classes_data = []
+            
+            # ── Query: ClassSessionTemplate for today's day of week ──
+            from attendance.models import ClassSessionTemplate, AttendanceSession
+            
+            templates = ClassSessionTemplate.objects.filter(
                 subject_id__in=enrolled_subjects,
-                date=today
+                day_of_week=today_weekday,  # Match today's day of week
+                is_active=True
             ).select_related(
                 'subject',
                 'subject__teacher',
                 'subject__teacher__user'
             ).order_by('start_time')
             
-            classes_data = []
-            
-            for session in todays_sessions:
-                subject = session.subject
+            for template in templates:
+                subject = template.subject
                 
-                # Check if teacher has active session
+                # Check if teacher has active session for this template today
                 active_session = AttendanceSession.objects.filter(
-                    class_session=session,
+                    template=template,
+                    session_date=today,
                     ended_at__isnull=True
                 ).first()
                 
-                # Check if student already marked attendance
+                # Check if student already marked attendance for this template today
                 student_attendance = Attendance.objects.filter(
                     student=student,
-                    class_session=session,
-                    initiated_by='student'
+                    attendance_session__template=template,
+                    attendance_session__session_date=today
                 ).first()
                 
                 # Determine session status based on time windows
-                class_start = timezone.datetime.combine(today, session.start_time)
-                class_end = timezone.datetime.combine(today, session.end_time)
+                from datetime import datetime, time
+                class_start = timezone.datetime.combine(today, template.start_time)
+                class_end = timezone.datetime.combine(today, template.end_time)
                 
                 # Convert to timezone-aware if needed
                 if timezone.is_naive(class_start):
@@ -616,26 +625,33 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 can_mark_attendance = (session_status == 'running' and active_session is not None)
                 
                 classes_data.append({
-                    'id': str(session.id),
-                    'class_name': session.class_name,
+                    'id': str(template.id),
+                    'class_name': f"{template.subject.code} - {template.get_day_of_week_display()} {template.start_time.strftime('%H:%M')}-{template.end_time.strftime('%H:%M')}",
                     'subject_id': str(subject.id),
                     'subject_name': subject.name,
                     'subject_code': subject.code,
-                    'date': session.date.isoformat(),
-                    'start_time': session.start_time.isoformat(),
-                    'end_time': session.end_time.isoformat(),
+                    'date': today.isoformat(),
+                    'start_time': template.start_time.isoformat(),
+                    'end_time': template.end_time.isoformat(),
                     'teacher_name': self._get_teacher_name(subject.teacher),
                     'teacher_id': str(subject.teacher.user.id) if subject.teacher else '',
-                    'session_status': session_status,  # 'upcoming', 'running', 'completed'
-                    'is_session_active': active_session is not None,  # Teacher started?
-                    'can_mark_attendance': can_mark_attendance,  # Can student mark NOW?
+                    'session_status': session_status,
+                    'is_session_active': active_session is not None,
+                    'can_mark_attendance': can_mark_attendance,
                     'has_marked_attendance': student_attendance is not None,
                     'attendance_id': str(student_attendance.id) if student_attendance else None,
                     'attendance_confidence': round(student_attendance.detection_confidence, 3) if student_attendance else None,
                     'attendance_status': student_attendance.status if student_attendance else None,
                 })
             
-            return Response(classes_data, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    'success': True,
+                    'data': classes_data,
+                    'count': len(classes_data),
+                },
+                status=status.HTTP_200_OK
+            )
         
         except Exception as e:
             import traceback
