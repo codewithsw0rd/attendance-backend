@@ -11,7 +11,7 @@ from ..filters import FaceDataFilter, FaceEmbeddingFilter, AttendanceFilter, Att
 from rest_framework import serializers
 from .serializers import (
     FaceDataSerializer, AttendanceSerializer, AttendanceReadSerializer, AttendanceLogSerializer,
-    AttendanceMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer, 
+    AttendanceMarkRequestSerializer, AttendanceSelfMarkRequestSerializer, AttendanceMarkResponseSerializer, SessionSummarySerializer, 
     SessionEndResponseSerializer, AttendanceSessionSerializer,
     StartSessionRequestSerializer, EndSessionRequestSerializer
 )
@@ -311,6 +311,277 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 'distance_to_nearest': round(distance, 6),
                 'is_suspicious': is_suspicious,
                 'message': f'Attendance marked as {attendance_status}'
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        )
+    
+    @extend_schema(
+        responses={200: AttendanceReadSerializer(many=True)},
+        description="Get current student's attendance history. Only accessible to students. Returns list of attendance records with student, class session, and verification details."
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_attendance(self, request):
+        """Get current student's attendance history"""
+        if request.user.user_type != UserType.STUDENT:
+            return Response(
+                {'detail': 'Only students can access their attendance'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        attendances = Attendance.objects.filter(
+            student__user=request.user
+        ).order_by('-marked_at')
+        
+        serializer = AttendanceReadSerializer(attendances, many=True)
+        return Response(serializer.data)
+    
+    @extend_schema(
+        request=AttendanceSelfMarkRequestSerializer,
+        responses={201: AttendanceMarkResponseSerializer, 200: AttendanceMarkResponseSerializer},
+        description="Student self-marks attendance during active teacher session.\n\nRequirements:\n1. User must be a student\n2. Must be enrolled in the class\n3. Must have registered face\n4. Teacher must have started an active session for this class\n5. Class session date must be today\n6. Current time must be within class time window (with grace period)"
+    )
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated], parser_classes=[MultiPartParser, FormParser])
+    def mark_self(self, request):
+        """
+        Student marks own attendance with face recognition.
+        
+        This endpoint is only available when teacher has started an active session.
+        It validates:
+        1. Student is enrolled in the class
+        2. Student has registered face
+        3. Teacher has an active session running
+        4. Current time is within class time window
+        
+        Request (multipart/form-data):
+            - image: Face image file
+            - class_session_id: UUID of the class session
+            - latitude: GPS latitude (optional)
+            - longitude: GPS longitude (optional)
+            - liveness_passed: 'PASS', 'FAIL', or 'UNKNOWN'
+            - timestamp_signed: Digitally signed timestamp from client
+        
+        Returns: Attendance result with confidence and status
+        """
+        if request.user.user_type != UserType.STUDENT:
+            return Response(
+                {'detail': 'Only students can use this endpoint'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validate required fields
+        if 'image' not in request.FILES:
+            return Response(
+                {'detail': 'Image file is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        class_session_id = request.data.get('class_session_id')
+        if not class_session_id:
+            return Response(
+                {'detail': 'class_session_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            class_session = ClassSession.objects.get(id=class_session_id)
+        except ClassSession.DoesNotExist:
+            return Response(
+                {'detail': 'Class session not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Validate student is enrolled
+        student_profile = request.user.studentprofile
+        is_enrolled = Enrollment.objects.filter(
+            student=student_profile,
+            subject=class_session.subject
+        ).exists()
+        
+        if not is_enrolled:
+            return Response(
+                {'detail': 'You are not enrolled in this subject'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check if student has registered face
+        try:
+            student_face_data = FaceData.objects.get(student=student_profile)
+            if not student_face_data.is_enrolled:
+                return Response(
+                    {'detail': 'You have not completed face registration yet'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except FaceData.DoesNotExist:
+            return Response(
+                {'detail': 'You have not registered your face yet'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ CHECK: Teacher must have active session for this class
+        active_session = AttendanceSession.objects.filter(
+            class_session=class_session,
+            ended_at__isnull=True  # Session still active
+        ).first()
+        
+        if not active_session:
+            return Response(
+                {'detail': 'Teacher has not started attendance session for this class yet. Please wait for your teacher to start the session.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ✅ CHECK: Class session date must be today
+        today = timezone.now().date()
+        if class_session.date != today:
+            return Response(
+                {'detail': 'Attendance can only be marked for today\'s classes'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ✅ CHECK: Current time must be within class time window (with 5 min grace)
+        from datetime import timedelta
+        now_time = timezone.now().time()
+        grace_period = timedelta(minutes=5)
+        end_time_with_grace = (
+            timezone.datetime.combine(timezone.now().date(), class_session.end_time)
+            + grace_period
+        ).time()
+        
+        if not (class_session.start_time <= now_time <= end_time_with_grace):
+            return Response(
+                {'detail': f'Attendance can only be marked between {class_session.start_time} and {end_time_with_grace}'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ✅ CHECK: Student hasn't already marked attendance in this session
+        existing_attendance = Attendance.objects.filter(
+            student=student_profile,
+            attendance_session=active_session,
+            initiated_by='student'
+        ).first()
+        
+        if existing_attendance:
+            return Response(
+                {'detail': 'You have already marked attendance for this class'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get all enrolled students' face embeddings
+        face_data_qs = (
+            FaceData.objects
+            .filter(
+                student__enrollments__subject=class_session.subject,
+                is_enrolled=True,
+            )
+            .select_related('student__user')
+            .prefetch_related('embeddings')
+        )
+
+        stored_embeddings = []
+        student_ids = []
+
+        for face_data in face_data_qs:
+            for embedding_record in face_data.embeddings.all():
+                stored_embeddings.append(embedding_record.embedding)
+                student_ids.append(str(face_data.student.user.id))
+        
+        if not stored_embeddings:
+            return Response(
+                {'detail': 'No enrolled students with registered faces found'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Call ML service
+        image_file = request.FILES['image']
+        
+        try:
+            ml_result = process_attendance(
+                image_file,
+                stored_embeddings,
+                student_ids,
+                session_id=str(active_session.id)
+            )
+        except MLServiceError as e:
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Extract ML result
+        identified_student_id = ml_result.get('student_id')
+        confidence = ml_result.get('confidence', 0.0)
+        distance = ml_result.get('distance_to_nearest', float('inf'))
+        ml_status = ml_result.get('status', 'unknown')
+        
+        # Determine attendance status
+        if ml_status == 'identified' and identified_student_id == str(request.user.id):
+            # Face matched current student
+            attendance_status = 'PRESENT'
+        elif confidence >= 0.8:
+            # High confidence match even if not current student
+            attendance_status = 'PRESENT'
+        else:
+            # Low confidence or no match
+            attendance_status = 'ABSENT'
+        
+        # Create Attendance record (student-initiated)
+        attendance, created = Attendance.objects.get_or_create(
+            student=student_profile,
+            class_session=class_session,
+            attendance_session=active_session,
+            defaults={
+                'status': attendance_status,
+                'initiated_by': 'student',
+                'initiated_by_user': request.user,
+                'frame_detected': timezone.now(),
+                'detection_confidence': confidence,
+                'attempt_count': 1
+            }
+        )
+        
+        # If not created (already exists), increment attempt count
+        if not created:
+            attendance.attempt_count += 1
+            attendance.save()
+        
+        # Extract verification data
+        latitude = request.data.get('latitude')
+        longitude = request.data.get('longitude')
+        distance_from_classroom = request.data.get('distance_from_classroom')
+        liveness_passed = request.data.get('liveness_passed', 'UNKNOWN')
+        timestamp_signed = request.data.get('timestamp_signed')
+        
+        # Determine if suspicious
+        is_suspicious = (
+            ml_status != 'identified' or
+            confidence < 0.3 or
+            distance > 0.68
+        )
+        
+        # Create or update AttendanceLog
+        AttendanceLog.objects.create(
+            attendance=attendance,
+            face_confidence=confidence,
+            distance_to_nearest=distance,
+            latitude=float(latitude) if latitude else None,
+            longitude=float(longitude) if longitude else None,
+            distance_from_classroom=float(distance_from_classroom) if distance_from_classroom else None,
+            liveness_passed=liveness_passed,
+            face_image_path=f"attendance/student/{student_profile.user.email}_{timezone.now().isoformat()}.jpg",
+            is_suspicious=is_suspicious,
+            timestamp_signed=timestamp_signed
+        )
+        
+        return Response(
+            {
+                'attendance_id': str(attendance.id),
+                'status': attendance_status,
+                'marked_at': attendance.marked_at.isoformat(),
+                'face_matched': ml_status == 'identified',
+                'confidence': round(confidence, 4),
+                'distance_to_nearest': round(distance, 6),
+                'is_suspicious': is_suspicious,
+                'message': f'Attendance marked as {attendance_status}',
+                'session_id': str(active_session.id)
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
         )

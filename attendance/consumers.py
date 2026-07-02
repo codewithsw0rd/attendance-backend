@@ -16,7 +16,7 @@ from attendance.ml_client import process_continuous_detection, MLServiceError
 logger = logging.getLogger(__name__)
 
 _CACHE_REFRESH_INTERVAL = 30
-_PROCESSING_TIMEOUT = 12.0
+_PROCESSING_TIMEOUT = 8.0  # Reduced from 12s to 8s for faster failure detection
 
 
 class AttendanceStreamConsumer(AsyncWebsocketConsumer):
