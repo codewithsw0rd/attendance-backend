@@ -542,7 +542,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
         
         Status meanings:
         - 'upcoming': Class hasn't started yet (start_time > now)
-        - 'running': Teacher has active session (now between start and end time)
+        - 'running': Time window is during class (between start and end+5min), AND teacher must have started session
         - 'completed': Class time has ended
         
         Returns list with detailed session info and attendance status.
@@ -556,8 +556,11 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             
             today = timezone.now().date()
             now = timezone.now()
+            student = request.user.studentprofile
+            
+            # Get student's enrolled subjects
             enrolled_subjects = Enrollment.objects.filter(
-                student__user=request.user
+                student=student
             ).values_list('subject_id', flat=True)
             
             # Get today's classes for enrolled subjects
@@ -583,12 +586,12 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 
                 # Check if student already marked attendance
                 student_attendance = Attendance.objects.filter(
-                    student__user=request.user,
+                    student=student,
                     class_session=session,
                     initiated_by='student'
                 ).first()
                 
-                # Determine session status
+                # Determine session status based on time windows
                 class_start = timezone.datetime.combine(today, session.start_time)
                 class_end = timezone.datetime.combine(today, session.end_time)
                 
@@ -601,6 +604,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 # Add 5 min grace period to end time
                 class_end_with_grace = class_end + timezone.timedelta(minutes=5)
                 
+                # Determine session_status purely on time
                 if now < class_start:
                     session_status = 'upcoming'
                 elif now > class_end_with_grace:
@@ -608,8 +612,8 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 else:
                     session_status = 'running'
                 
-                # Session is running AND teacher has started
-                is_session_running = session_status == 'running' and active_session is not None
+                # can_mark_attendance = TRUE only if time window is 'running' AND teacher started session
+                can_mark_attendance = (session_status == 'running' and active_session is not None)
                 
                 classes_data.append({
                     'id': str(session.id),
@@ -624,7 +628,7 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                     'teacher_id': str(subject.teacher.user.id) if subject.teacher else '',
                     'session_status': session_status,  # 'upcoming', 'running', 'completed'
                     'is_session_active': active_session is not None,  # Teacher started?
-                    'can_mark_attendance': is_session_running,  # Can student mark NOW?
+                    'can_mark_attendance': can_mark_attendance,  # Can student mark NOW?
                     'has_marked_attendance': student_attendance is not None,
                     'attendance_id': str(student_attendance.id) if student_attendance else None,
                     'attendance_confidence': round(student_attendance.detection_confidence, 3) if student_attendance else None,
@@ -634,6 +638,8 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             return Response(classes_data, status=status.HTTP_200_OK)
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response(
                 {'detail': f'Error fetching today\'s classes: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

@@ -452,18 +452,22 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # ✅ CHECK: Student hasn't already marked attendance in this session
+        # ✅ CHECK: Student hasn't already marked attendance for this CLASS (not just session)
         existing_attendance = Attendance.objects.filter(
             student=student_profile,
-            attendance_session=active_session,
-            initiated_by='student'
+            class_session=class_session,  # Check whole class_session, not just attendance_session
         ).first()
         
         if existing_attendance:
-            return Response(
-                {'detail': 'You have already marked attendance for this class'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # If previously marked by student, block (no double marking)
+            if existing_attendance.initiated_by == 'student':
+                return Response(
+                    {'detail': 'You have already marked attendance for this class'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # If marked by teacher/admin, allow student to re-mark/verify themselves
+            # This gives student a chance to verify with their own face capture
+            logger.info(f"Student {student_profile.user.email} overriding {existing_attendance.initiated_by} attendance for {class_session.id}")
         
         # Get all enrolled students' face embeddings
         face_data_qs = (
@@ -512,16 +516,23 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         distance = ml_result.get('distance_to_nearest', float('inf'))
         ml_status = ml_result.get('status', 'unknown')
         
-        # Determine attendance status
-        if ml_status == 'identified' and identified_student_id == str(request.user.id):
-            # Face matched current student
+        # Determine attendance status based on ML confidence
+        # Strict: Only mark PRESENT if own face identified with high confidence
+        if (ml_status == 'identified' and 
+            identified_student_id == str(request.user.id) and 
+            confidence >= 0.85):  # High threshold for own face
             attendance_status = 'PRESENT'
-        elif confidence >= 0.8:
-            # High confidence match even if not current student
+            logger.info(f"PRESENT: Student {student_profile.user.email} face identified with {confidence:.2%} confidence")
+        
+        # Loose: Mark PRESENT if ANY face detected with moderate-high confidence (benefit of doubt)
+        elif confidence >= 0.75:  # Moderate threshold
             attendance_status = 'PRESENT'
+            logger.info(f"PRESENT: Face detected for {student_profile.user.email} with {confidence:.2%} confidence (not student-specific)")
+        
+        # Low confidence
         else:
-            # Low confidence or no match
             attendance_status = 'ABSENT'
+            logger.info(f"ABSENT: Face confidence too low for {student_profile.user.email} (confidence={confidence:.2%})")
         
         # Create Attendance record (student-initiated)
         attendance, created = Attendance.objects.get_or_create(
@@ -570,6 +581,28 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             is_suspicious=is_suspicious,
             timestamp_signed=timestamp_signed
         )
+        
+        # Broadcast attendance marked notification to all enrolled students
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        
+        channel_layer = get_channel_layer()
+        group_name = f'session_students_{class_session.id}'
+        
+        try:
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    'type': 'attendance.marked',
+                    'session_id': str(active_session.id),
+                    'class_session_id': str(class_session.id),
+                    'subject_code': class_session.subject.code,
+                    'status': attendance_status,
+                    'confidence': confidence,
+                }
+            )
+        except Exception as e:
+            print(f"Error broadcasting attendance_marked: {str(e)}")
         
         return Response(
             {
@@ -749,6 +782,29 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             marked_students=[]
         )
         
+        # Broadcast session started notification to all enrolled students
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        import json
+        
+        channel_layer = get_channel_layer()
+        group_name = f'session_students_{class_session.id}'
+        
+        try:
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    'type': 'session.started',
+                    'session_id': str(session.id),
+                    'class_session_id': str(class_session.id),
+                    'subject_code': class_session.subject.code,
+                    'subject_name': class_session.subject.name,
+                    'template_id': str(class_session.template.id) if class_session.template else None,
+                }
+            )
+        except Exception as e:
+            print(f"Error broadcasting session_started: {str(e)}")
+        
         serializer = AttendanceSessionSerializer(session)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -828,6 +884,28 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             attendance_session=session,
             status='ABSENT'
         ).count()
+        
+        # Broadcast session ended notification to all enrolled students
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        
+        channel_layer = get_channel_layer()
+        group_name = f'session_students_{session.class_session.id}'
+        
+        try:
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    'type': 'session.ended',
+                    'session_id': str(session.id),
+                    'class_session_id': str(session.class_session.id),
+                    'subject_code': session.class_session.subject.code,
+                    'marked_count': present_count,
+                    'absent_count': absent_count,
+                }
+            )
+        except Exception as e:
+            print(f"Error broadcasting session_ended: {str(e)}")
         
         return Response({
             'session_id': str(session.id),

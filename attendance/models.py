@@ -1,7 +1,7 @@
 from django.db import models
 from core.utils.base_model import BaseModel
 from accounts.models import StudentProfile
-from academics.models import ClassSession
+from academics.models import ClassSession, Subject
 
 
 class FaceData(BaseModel):
@@ -40,14 +40,87 @@ class FaceEmbedding(BaseModel):
         unique_together = ('face_data', 'photo_number')
         ordering = ['photo_number']
 
+
+class ClassSessionTemplate(BaseModel):
+    """
+    Reusable template for recurring classes.
+    Allows the same attendance session to be used across multiple dates.
+    Example: CS101 every Monday 9:00 AM - 10:00 AM
+    """
+    DAY_OF_WEEK_CHOICES = [
+        (0, 'Monday'),
+        (1, 'Tuesday'),
+        (2, 'Wednesday'),
+        (3, 'Thursday'),
+        (4, 'Friday'),
+        (5, 'Saturday'),
+        (6, 'Sunday'),
+    ]
+    
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        related_name='session_templates',
+        help_text="Subject this template is for"
+    )
+    
+    day_of_week = models.IntegerField(
+        choices=DAY_OF_WEEK_CHOICES,
+        help_text="Day of week (0=Monday, 6=Sunday)"
+    )
+    
+    start_time = models.TimeField(
+        help_text="Class start time"
+    )
+    
+    end_time = models.TimeField(
+        help_text="Class end time"
+    )
+    
+    max_attendance_marking_minutes = models.IntegerField(
+        default=15,
+        help_text="Maximum minutes after class start that students can mark attendance"
+    )
+    
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this template is active"
+    )
+    
+    class Meta:
+        unique_together = ('subject', 'day_of_week', 'start_time')
+        indexes = [
+            models.Index(fields=['subject', 'day_of_week']),
+            models.Index(fields=['is_active']),
+        ]
+        ordering = ['day_of_week', 'start_time']
+    
+    def __str__(self):
+        day_name = self.get_day_of_week_display()
+        return f"{self.subject.code} - {day_name} {self.start_time}"
+
 class AttendanceSession(BaseModel):
-    """Real-time attendance session tracking"""
+    """Real-time attendance session tracking (reusable across dates via template)"""
+    
+    # Link to template for recurring session tracking
+    template = models.ForeignKey(
+        ClassSessionTemplate,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='attendance_sessions',
+        help_text="Template this session is based on (for recurring sessions)"
+    )
+    
+    # Specific class session instance
     class_session = models.ForeignKey(
         ClassSession,
         on_delete=models.CASCADE,
         related_name='real_time_sessions',
         help_text="Class session this attendance is for"
     )
+    
+    # Teacher who initiated
     initiated_by = models.ForeignKey(
         'accounts.CustomUser',
         on_delete=models.SET_NULL,
@@ -55,8 +128,25 @@ class AttendanceSession(BaseModel):
         related_name='attendance_sessions',
         help_text="Teacher who initiated this session"
     )
+    
+    # Session date tracking (for template-based queries)
+    session_date = models.DateField(
+        auto_now_add=True,
+        help_text="Date this session occurred"
+    )
+    
+    # Session time tracking (reusable key for recurring sessions)
+    session_time = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Time of session (e.g., 09:00 for Monday 9 AM class)"
+    )
+    
+    # Session timing
     started_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
+    
+    # Students marked present
     marked_students = models.JSONField(
         default=list,
         help_text="List of student user IDs detected during session"
@@ -65,11 +155,15 @@ class AttendanceSession(BaseModel):
     class Meta:
         ordering = ['-started_at']
         indexes = [
+            models.Index(fields=['template', 'session_date']),  # For recurring sessions
             models.Index(fields=['class_session', 'started_at']),
+            models.Index(fields=['session_date', 'session_time']),  # Time-based lookup
             models.Index(fields=['ended_at']),
         ]
     
     def __str__(self):
+        if self.template:
+            return f"Session {self.template.get_day_of_week_display()} {self.session_time} ({self.session_date})"
         return f"Session for {self.class_session.class_name} ({self.started_at})"
     
     def is_active(self):
@@ -97,8 +191,6 @@ class Attendance(BaseModel):
         AttendanceSession,
         on_delete=models.CASCADE,
         related_name='attendances',
-        null=True,
-        blank=True,
         help_text="Link to the real-time session during which this attendance was marked"
     )
     status = models.CharField(max_length=10, choices=PRESENCE_CHOICES, default='ABSENT')
@@ -137,23 +229,29 @@ class Attendance(BaseModel):
     class Meta:
         ordering = ['-marked_at']
         constraints = [
-            # Prevent duplicate attendance within same teacher session
+            # ONE per attendance_session (prevents duplicate marks in same session)
             models.UniqueConstraint(
                 fields=['student', 'attendance_session'],
-                condition=models.Q(attendance_session__isnull=False),
                 name='unique_attendance_per_session'
             ),
-            # Allow one student-initiated and one teacher-initiated per class_session
+            # ONE student-initiated per class_session (prevents double self-marking)
             models.UniqueConstraint(
                 fields=['student', 'class_session', 'initiated_by'],
                 condition=models.Q(initiated_by='student'),
                 name='unique_student_initiated_per_class_session'
             ),
+            # ONE manual per class_session (prevents duplicate admin overrides)
             models.UniqueConstraint(
                 fields=['student', 'class_session', 'initiated_by'],
                 condition=models.Q(initiated_by='manual'),
                 name='unique_manual_per_class_session'
-            )
+            ),
+            # ONE teacher per class_session (can be overridden by student)
+            models.UniqueConstraint(
+                fields=['student', 'class_session', 'initiated_by'],
+                condition=models.Q(initiated_by='teacher'),
+                name='unique_teacher_per_class_session'
+            ),
         ]
     
     def __str__(self):

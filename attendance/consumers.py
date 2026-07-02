@@ -12,6 +12,7 @@ from uuid import UUID
 from attendance.models import AttendanceSession, Attendance, FaceData
 from academics.models import Enrollment
 from attendance.ml_client import process_continuous_detection, MLServiceError
+from accounts.models import UserType
 
 logger = logging.getLogger(__name__)
 
@@ -301,3 +302,199 @@ class AttendanceStreamConsumer(AsyncWebsocketConsumer):
             'student_name': f"{student.first_name or ''} {student.last_name or ''}".strip(),
             'student_roll_number': student.roll_number,
         }
+
+
+class StudentNotificationConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for real-time student notifications.
+    Handles session start/end and attendance marking notifications.
+    
+    Events:
+    - session_started: Teacher started attendance session
+    - session_ended: Teacher ended attendance session
+    - attendance_marked: Student's attendance has been marked
+    """
+    
+    async def connect(self):
+        """Handle WebSocket connection for student notifications."""
+        user = self.scope['user']
+        
+        # Check authentication
+        if not user.is_authenticated:
+            logger.warning("WebSocket auth failed for notifications")
+            await self.close(code=4003)
+            return
+        
+        # Check user type
+        if user.user_type != UserType.STUDENT:
+            logger.warning(f"Non-student user {user.id} tried to connect to notifications")
+            await self.close(code=4003)
+            return
+        
+        self.user_id = str(user.id)
+        self.student_group = f'student_notifications_{self.user_id}'
+        self.session_groups = []
+        
+        # Join personal notification group
+        try:
+            await self.channel_layer.group_add(self.student_group, self.channel_name)
+        except Exception as e:
+            logger.error(f"Error joining personal group: {str(e)}")
+            await self.close(code=1011)
+            return
+        
+        # Join groups for all enrolled classes
+        await self._join_enrolled_class_groups()
+        
+        await self.accept()
+        
+        logger.info(f"Student {self.user_id} connected to notifications. "
+                   f"Joined {len(self.session_groups)} session groups")
+        
+        await self.send(json.dumps({
+            'type': 'connection_established',
+            'message': 'Connected to real-time notifications',
+            'enrolled_classes': len(self.session_groups)
+        }))
+    
+    async def disconnect(self, close_code):
+        """Handle WebSocket disconnection."""
+        # Leave personal group
+        if hasattr(self, 'student_group'):
+            try:
+                await self.channel_layer.group_discard(self.student_group, self.channel_name)
+            except Exception as e:
+                logger.error(f"Error leaving personal group: {str(e)}")
+        
+        # Leave all session groups
+        if hasattr(self, 'session_groups'):
+            for session_group in self.session_groups:
+                try:
+                    await self.channel_layer.group_discard(session_group, self.channel_name)
+                except Exception as e:
+                    logger.error(f"Error leaving session group {session_group}: {str(e)}")
+        
+        logger.info(f"Student {self.user_id} disconnected from notifications")
+    
+    @database_sync_to_async
+    def _join_enrolled_class_groups(self):
+        """Join groups for all enrolled classes."""
+        try:
+            from academics.models import ClassSession
+            
+            student = self.scope['user'].studentprofile
+            today = timezone.now().date()
+            
+            # Get enrolled subjects
+            enrollments = Enrollment.objects.filter(
+                student=student
+            ).values_list('subject_id', flat=True)
+            
+            # Get today's and future class sessions (next 7 days)
+            future_date = today + timezone.timedelta(days=7)
+            sessions = ClassSession.objects.filter(
+                subject_id__in=enrollments,
+                date__gte=today,
+                date__lte=future_date
+            )
+            
+            groups = []
+            for session in sessions:
+                group_name = f'session_students_{session.id}'
+                groups.append(group_name)
+            
+            self.session_groups = groups
+            logger.debug(f"Student {self.user_id} will join {len(groups)} session groups")
+        except Exception as e:
+            logger.error(f"Error joining enrolled class groups: {str(e)}")
+            self.session_groups = []
+    
+    async def session_started(self, event):
+        """
+        Handle session_started event from channel layer.
+        Called when teacher starts attendance session.
+        
+        Event structure:
+        {
+            "type": "session.started",
+            "session_id": "...",
+            "class_session_id": "...",
+            "subject_code": "CS101",
+            "subject_name": "Intro to CS",
+            "template_id": "..."
+        }
+        """
+        try:
+            await self.send(json.dumps({
+                'type': 'session_started',
+                'session_id': event.get('session_id'),
+                'class_session_id': event.get('class_session_id'),
+                'subject_code': event.get('subject_code'),
+                'subject_name': event.get('subject_name', ''),
+                'template_id': event.get('template_id'),
+                'message': f"🔴 {event.get('subject_code')} session started! Click to mark attendance.",
+                'timestamp': timezone.now().isoformat()
+            }))
+            logger.debug(f"Sent session_started notification to {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error sending session_started notification: {str(e)}")
+    
+    async def session_ended(self, event):
+        """
+        Handle session_ended event from channel layer.
+        Called when teacher ends attendance session.
+        
+        Event structure:
+        {
+            "type": "session.ended",
+            "session_id": "...",
+            "class_session_id": "...",
+            "subject_code": "CS101",
+            "marked_count": 25,
+            "absent_count": 10
+        }
+        """
+        try:
+            await self.send(json.dumps({
+                'type': 'session_ended',
+                'session_id': event.get('session_id'),
+                'class_session_id': event.get('class_session_id'),
+                'subject_code': event.get('subject_code'),
+                'marked_count': event.get('marked_count', 0),
+                'absent_count': event.get('absent_count', 0),
+                'message': f"✅ {event.get('subject_code')} session ended.",
+                'timestamp': timezone.now().isoformat()
+            }))
+            logger.debug(f"Sent session_ended notification to {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error sending session_ended notification: {str(e)}")
+    
+    async def attendance_marked(self, event):
+        """
+        Handle attendance_marked event.
+        Called when student's attendance has been marked (self or ML).
+        
+        Event structure:
+        {
+            "type": "attendance.marked",
+            "session_id": "...",
+            "class_session_id": "...",
+            "subject_code": "CS101",
+            "status": "PRESENT",
+            "confidence": 0.92
+        }
+        """
+        try:
+            await self.send(json.dumps({
+                'type': 'attendance_marked',
+                'session_id': event.get('session_id'),
+                'class_session_id': event.get('class_session_id'),
+                'subject_code': event.get('subject_code'),
+                'status': event.get('status', 'UNKNOWN'),
+                'confidence': round(event.get('confidence', 0.0), 3),
+                'message': f"✅ {event.get('subject_code')} marked as {event.get('status')} ({round(event.get('confidence', 0.0) * 100, 0):.0f}%)",
+                'timestamp': timezone.now().isoformat()
+            }))
+            logger.debug(f"Sent attendance_marked notification to {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error sending attendance_marked notification: {str(e)}")
