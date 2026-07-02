@@ -117,19 +117,19 @@ class AnalyticsViewSet(viewsets.ViewSet):
         """Calculate face recognition performance statistics"""
         # Count successful recognitions (with high confidence)
         successful = AttendanceLog.objects.filter(
-            liveness_status='PASS',
-            confidence_score__gte=0.8
+            liveness_passed='PASS',
+            face_confidence__gte=0.8
         ).count()
 
         # Count low confidence (pass but low score)
         low_confidence = AttendanceLog.objects.filter(
-            liveness_status='PASS',
-            confidence_score__lt=0.8
+            liveness_passed='PASS',
+            face_confidence__lt=0.8
         ).count()
 
         # Count failed recognitions
         failed = AttendanceLog.objects.filter(
-            liveness_status__in=['FAIL', 'REJECTED']
+            liveness_passed__in=['FAIL', 'UNKNOWN']
         ).count()
 
         total = successful + low_confidence + failed
@@ -138,8 +138,8 @@ class AnalyticsViewSet(viewsets.ViewSet):
 
         # Get average confidence
         avg_confidence = AttendanceLog.objects.filter(
-            liveness_status='PASS'
-        ).aggregate(avg=Avg('confidence_score'))['avg'] or 0
+            liveness_passed='PASS'
+        ).aggregate(avg=Avg('face_confidence'))['avg'] or 0
         avg_confidence = round(avg_confidence, 3)
 
         return {
@@ -160,20 +160,20 @@ class AnalyticsViewSet(viewsets.ViewSet):
             date_obj = today - timedelta(days=i)
 
             successful = AttendanceLog.objects.filter(
-                liveness_status='PASS',
-                confidence_score__gte=0.8,
-                timestamp__date=date_obj
+                liveness_passed='PASS',
+                face_confidence__gte=0.8,
+                created_at__date=date_obj
             ).count()
 
             low_confidence = AttendanceLog.objects.filter(
-                liveness_status='PASS',
-                confidence_score__lt=0.8,
-                timestamp__date=date_obj
+                liveness_passed='PASS',
+                face_confidence__lt=0.8,
+                created_at__date=date_obj
             ).count()
 
             failed = AttendanceLog.objects.filter(
-                liveness_status__in=['FAIL', 'REJECTED'],
-                timestamp__date=date_obj
+                liveness_passed__in=['FAIL', 'UNKNOWN'],
+                created_at__date=date_obj
             ).count()
 
             if successful + low_confidence + failed > 0:
