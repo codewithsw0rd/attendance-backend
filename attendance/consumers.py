@@ -628,8 +628,8 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
         best_detection = max(detections, key=lambda x: x.get('confidence', 0))
         confidence = best_detection.get('confidence', 0)
         
-        # Mark attendance if confidence is high enough (e.g., > 0.7)
-        CONFIDENCE_THRESHOLD = 0.7
+        # Mark attendance if confidence is high enough (e.g., > 0.80)
+        CONFIDENCE_THRESHOLD = 0.80
         if confidence >= CONFIDENCE_THRESHOLD:
             marked = await self._mark_student_present(confidence)
             if marked:
