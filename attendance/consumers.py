@@ -628,9 +628,9 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
         best_detection = max(detections, key=lambda x: x.get('confidence', 0))
         confidence = best_detection.get('confidence', 0)
         
-        # Mark attendance if confidence is high enough (accept below 0.8)
-        CONFIDENCE_THRESHOLD = 0.60
-        if confidence >= CONFIDENCE_THRESHOLD:
+        # Mark attendance if confidence is below 0.82 (continuous detection threshold)
+        CONFIDENCE_THRESHOLD = 0.82
+        if confidence <= CONFIDENCE_THRESHOLD:
             marked = await self._mark_student_present(confidence)
             if marked:
                 return {
@@ -684,8 +684,13 @@ class StudentAttendanceStreamConsumer(AsyncWebsocketConsumer):
                 logger.info(f"Student {self.user_id} marked present in session {self.attendance_session_id}")
                 return True
             else:
-                logger.info(f"Student {self.user_id} already marked in session {self.attendance_session_id}")
-                return False
+                # Already marked - update confidence if new one is higher
+                if confidence > (attendance.detection_confidence or 0):
+                    attendance.detection_confidence = confidence
+                    attendance.frame_detected = timezone.now()
+                    attendance.save()
+                    logger.info(f"Student {self.user_id} re-marked with higher confidence in session {self.attendance_session_id}")
+                return True  # ← Changed: return True even if already marked
         except Exception as e:
             logger.error(f"Error marking attendance for student {self.user_id}: {str(e)}")
             return False
