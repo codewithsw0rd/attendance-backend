@@ -948,6 +948,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             logger = logging.getLogger(__name__)
             logger.error(f"❌ Error broadcasting session_started to '{group_name}': {str(e)}", exc_info=True)
         
+        logger.info(f"🔍 ABOUT TO SEND EMAILS for session {session.id}")
+        
         # ✅ SEND EMAIL NOTIFICATIONS TO ALL ENROLLED STUDENTS (Synchronous)
         try:
             from django.core.mail import send_mass_mail
@@ -960,6 +962,11 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             enrollments = Enrollment.objects.filter(
                 subject=class_session.subject
             ).select_related('student__user')
+            
+            logger.info(f"📧 Found {enrollments.count()} enrolled students for subject {class_session.subject.id}")
+            
+            if not enrollments.exists():
+                logger.warning(f"⚠️  No enrolled students found for subject {class_session.subject.name}")
             
             email_messages = []
             
@@ -997,18 +1004,22 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                         [student_email],
                         html_message
                     ))
+                    logger.debug(f"📧 Prepared email for {student_email}")
                 except Exception as e:
-                    logger.error(f"Error preparing email for student {student.id}: {str(e)}")
+                    logger.error(f"❌ Error preparing email for student {student.id}: {str(e)}", exc_info=True)
                     continue
             
             # Send all emails
             if email_messages:
+                logger.info(f"📧 Sending {len(email_messages)} emails...")
                 send_mass_mail(email_messages, fail_silently=False)
-                logger.info(f"📧 Successfully sent {len(email_messages)} emails for session {session.id}")
+                logger.info(f"✅ Successfully sent {len(email_messages)} emails for session {session.id}")
+            else:
+                logger.warning(f"⚠️  No email messages to send for session {session.id}")
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f"Error sending emails: {str(e)}")
+            logger.error(f"❌ Error sending emails: {str(e)}", exc_info=True)
         
         from .serializers import AttendanceSessionSerializer
         serializer = AttendanceSessionSerializer(session)
