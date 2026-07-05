@@ -952,6 +952,79 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             logger = logging.getLogger(__name__)
             logger.error(f"❌ Error broadcasting session_started to '{group_name}': {str(e)}", exc_info=True)
         
+        logger.info(f"🔍 ABOUT TO SEND EMAILS for session {session.id}")
+        
+        # ✅ SEND EMAIL NOTIFICATIONS TO ALL ENROLLED STUDENTS (Synchronous)
+        try:
+            from django.core.mail import send_mass_mail
+            from django.template.loader import render_to_string
+            import logging
+            
+            logger = logging.getLogger(__name__)
+            
+            # Get all enrolled students
+            enrollments = Enrollment.objects.filter(
+                subject=class_session.subject
+            ).select_related('student__user')
+            
+            logger.info(f"📧 Found {enrollments.count()} enrolled students for subject {class_session.subject.id}")
+            
+            if not enrollments.exists():
+                logger.warning(f"⚠️  No enrolled students found for subject {class_session.subject.name}")
+            
+            email_messages = []
+            
+            for enrollment in enrollments:
+                student = enrollment.student
+                student_email = student.user.email
+                student_name = student.first_name or student.user.username
+                
+                try:
+                    # Email context
+                    context = {
+                        'student_name': student_name,
+                        'class_name': class_session.class_name,
+                        'subject_name': class_session.subject.name,
+                        'subject_code': class_session.subject.code,
+                        'start_time': class_session.start_time.strftime('%I:%M %p'),
+                        'end_time': class_session.end_time.strftime('%I:%M %p'),
+                        'date': class_session.date,
+                        'teacher_name': f"{class_session.subject.teacher.first_name} {class_session.subject.teacher.last_name}".strip(),
+                        'app_url': settings.FRONTEND_URL,
+                    }
+                    
+                    # Render HTML email
+                    html_message = render_to_string('emails/session_started.html', context)
+                    
+                    # Plain text fallback
+                    text_message = f"Attendance session started for {class_session.subject.name}"
+                    
+                    subject = f"Attendance Session Started - {class_session.subject.name}"
+                    
+                    email_messages.append((
+                        subject,
+                        text_message,
+                        settings.DEFAULT_FROM_EMAIL,
+                        [student_email],
+                        html_message
+                    ))
+                    logger.debug(f"📧 Prepared email for {student_email}")
+                except Exception as e:
+                    logger.error(f"❌ Error preparing email for student {student.id}: {str(e)}", exc_info=True)
+                    continue
+            
+            # Send all emails
+            if email_messages:
+                logger.info(f"📧 Sending {len(email_messages)} emails...")
+                send_mass_mail(email_messages, fail_silently=False)
+                logger.info(f"✅ Successfully sent {len(email_messages)} emails for session {session.id}")
+            else:
+                logger.warning(f"⚠️  No email messages to send for session {session.id}")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ Error sending emails: {str(e)}", exc_info=True)
+        
         from .serializers import AttendanceSessionSerializer
         serializer = AttendanceSessionSerializer(session)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
