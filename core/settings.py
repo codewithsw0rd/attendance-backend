@@ -228,3 +228,37 @@ CORS_ALLOW_CREDENTIALS = True
 
 # ML Service Configuration
 ML_SERVICE_URL = env('ML_SERVICE_URL', default='http://localhost:8000')
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# EMAIL CONFIGURATION (Gmail with App Password)
+# ────────────────────────────────────────────────────────────────────────────
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='krantikumar803@gmail.com')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='bbvj pcvs cpkm xwdz')
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+SERVER_EMAIL = EMAIL_HOST_USER
+
+# ────────────────────────────────────────────────────────────────────────────
+# CELERY CONFIGURATION (Async Task Queue)
+# ────────────────────────────────────────────────────────────────────────────
+
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/1')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default='redis://127.0.0.1:6379/1')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# FRONTEND URL (for email links)
+# ────────────────────────────────────────────────────────────────────────────
+
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
