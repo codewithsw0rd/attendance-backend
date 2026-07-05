@@ -25,6 +25,7 @@ from django.db.models import Count, Q, F
 from django.db import IntegrityError
 from datetime import datetime
 import logging
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
