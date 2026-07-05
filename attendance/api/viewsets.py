@@ -22,7 +22,12 @@ from django.utils import timezone
 import json
 from drf_spectacular.utils import extend_schema
 from django.db.models import Count, Q, F
+from django.db import IntegrityError
 from datetime import datetime
+import logging
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class FaceDataViewSet(viewsets.ModelViewSet):
@@ -1075,16 +1080,36 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         for enrollment in enrolled:
             student_user_id = str(enrollment.student.user.id)
             if student_user_id not in marked_student_ids:
-                Attendance.objects.get_or_create(
-                    student=enrollment.student,
-                    class_session=session.class_session,
-                    attendance_session=session,
-                    defaults={
-                        'status': 'ABSENT',
-                        'frame_detected': timezone.now(),
-                        'detection_confidence': 0.0
-                    }
-                )
+                # Attendance.objects.get_or_create(
+                #     student=enrollment.student,
+                #     class_session=session.class_session,
+                #     attendance_session=session,
+                #     defaults={
+                #         'status': 'ABSENT',
+                #         'frame_detected': timezone.now(),
+                #         'detection_confidence': 0.0
+                #     }
+                # )
+                try:
+                    attendance, created = Attendance.objects.get_or_create(
+                        student=enrollment.student,
+                        class_session=session.class_session,
+                        initiated_by='teacher', 
+                        defaults={
+                            'attendance_session': session,
+                            'status': 'ABSENT',
+                            'frame_detected': timezone.now(),
+                            'detection_confidence': 0.0
+                        }
+                    )
+                except IntegrityError:
+                    # Fallback in case a race condition or constraint collision still triggers
+                    attendance = Attendance.objects.filter(
+                        student=enrollment.student,
+                        class_session=session.class_session,
+                        initiated_by='teacher'
+                    ).first()
+                    created = False
         
         # Close session
         session.ended_at = timezone.now()
