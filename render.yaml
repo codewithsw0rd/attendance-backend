@@ -16,6 +16,6 @@ services:
       - key: SECRET_KEY
         sync: false
       - key: RESEND_API_KEY
-        value: re_tDewzBKB_kkcPtoeAdVkr6rvyKCfydVSJt
+        value: re_Ruu3CqJ4_HdUxzmgvyihh7478hjzNdWYW
       - key: FRONTEND_URL
         value: http://localhost:3000
