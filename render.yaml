@@ -15,9 +15,7 @@ services:
         value: https://heavily-regime-snowdrift.ngrok-free.dev
       - key: SECRET_KEY
         sync: false
-      - key: EMAIL_HOST_USER
-        value: krantikumar803@gmail.com
-      - key: EMAIL_HOST_PASSWORD
-        value: bbvj pcvs cpkm xwdz
+      - key: RESEND_API_KEY
+        sync: false
       - key: FRONTEND_URL
         value: http://localhost:3000

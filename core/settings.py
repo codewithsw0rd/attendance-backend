@@ -231,17 +231,13 @@ ML_SERVICE_URL = env('ML_SERVICE_URL', default='http://localhost:8000')
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# EMAIL CONFIGURATION (Gmail with App Password)
+# EMAIL CONFIGURATION (Resend)
 # ────────────────────────────────────────────────────────────────────────────
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='krantikumar803@gmail.com')
-EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='bbvj pcvs cpkm xwdz')
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
-SERVER_EMAIL = EMAIL_HOST_USER
+EMAIL_BACKEND = 'core.email_backends.ResendBackend'
+RESEND_API_KEY = env('RESEND_API_KEY', default='')
+DEFAULT_FROM_EMAIL = 'onboarding@resend.dev'  # Change to your verified domain email
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # ────────────────────────────────────────────────────────────────────────────
 # CELERY CONFIGURATION (Async Task Queue)
