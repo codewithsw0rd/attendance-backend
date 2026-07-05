@@ -952,7 +952,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         
         # ✅ SEND EMAIL NOTIFICATIONS TO ALL ENROLLED STUDENTS (Synchronous)
         try:
-            from django.core.mail import send_mass_mail
+            from django.core.mail import send_mail
             from django.template.loader import render_to_string
             import logging
             
@@ -968,7 +968,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             if not enrollments.exists():
                 logger.warning(f"⚠️  No enrolled students found for subject {class_session.subject.name}")
             
-            email_messages = []
+            email_count = 0
             
             for enrollment in enrollments:
                 student = enrollment.student
@@ -997,29 +997,27 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                     
                     subject = f"Attendance Session Started - {class_session.subject.name}"
                     
-                    email_messages.append((
+                    # Send individual email with HTML support
+                    send_mail(
                         subject,
                         text_message,
                         settings.DEFAULT_FROM_EMAIL,
                         [student_email],
-                        html_message
-                    ))
-                    logger.debug(f"📧 Prepared email for {student_email}")
+                        html_message=html_message,
+                        fail_silently=False,
+                    )
+                    
+                    email_count += 1
+                    logger.debug(f"📧 Email sent to {student_email}")
                 except Exception as e:
-                    logger.error(f"❌ Error preparing email for student {student.id}: {str(e)}", exc_info=True)
+                    logger.error(f"❌ Error sending email to student {student.id} ({student_email}): {str(e)}", exc_info=True)
                     continue
             
-            # Send all emails
-            if email_messages:
-                logger.info(f"📧 Sending {len(email_messages)} emails...")
-                send_mass_mail(email_messages, fail_silently=False)
-                logger.info(f"✅ Successfully sent {len(email_messages)} emails for session {session.id}")
-            else:
-                logger.warning(f"⚠️  No email messages to send for session {session.id}")
+            logger.info(f"✅ Successfully sent {email_count} emails for session {session.id}")
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f"❌ Error sending emails: {str(e)}", exc_info=True)
+            logger.error(f"❌ Error in email sending process: {str(e)}", exc_info=True)
         
         from .serializers import AttendanceSessionSerializer
         serializer = AttendanceSessionSerializer(session)
