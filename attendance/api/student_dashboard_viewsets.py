@@ -30,12 +30,12 @@ class StudentDashboardViewSet(viewsets.ViewSet):
         return request.user.user_type == UserType.STUDENT
 
     def _get_teacher_name(self, teacher):
-        if not teacher or not teacher.user:
+        if not teacher:
             return ''
-        first_name = (teacher.user.first_name or '').strip()
-        last_name = (teacher.user.last_name or '').strip()
+        first_name = (teacher.first_name or '').strip()
+        last_name = (teacher.last_name or '').strip()
         full_name = f"{first_name} {last_name}".strip()
-        return full_name if full_name else teacher.user.email
+        return full_name if full_name else (teacher.user.email if teacher.user else '')
 
     def _parse_date(self, date_str):
         try:
