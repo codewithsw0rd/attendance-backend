@@ -111,7 +111,9 @@ class SubjectViewSet(viewsets.ModelViewSet):
         for subject in queryset:
             teacher_name = ""
             if subject.teacher:
-                teacher_name = f"{subject.teacher.user.first_name} {subject.teacher.user.last_name}".strip()
+                first_name = (subject.teacher.first_name or '').strip()
+                last_name = (subject.teacher.last_name or '').strip()
+                teacher_name = f"{first_name} {last_name}".strip() or subject.teacher.user.email
             
             ws.append([
                 subject.name,
@@ -210,7 +212,9 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
             cell.font = header_font
         
         for enrollment in queryset:
-            student_name = f"{enrollment.student.user.first_name} {enrollment.student.user.last_name}".strip()
+            first_name = (enrollment.student.first_name or '').strip()
+            last_name = (enrollment.student.last_name or '').strip()
+            student_name = f"{first_name} {last_name}".strip() or enrollment.student.user.email
             ws.append([
                 student_name,
                 enrollment.student.roll_number,
@@ -320,7 +324,9 @@ class ClassSessionViewSet(viewsets.ReadOnlyModelViewSet):
         for session in queryset:
             teacher_name = ""
             if session.subject.teacher:
-                teacher_name = f"{session.subject.teacher.user.first_name} {session.subject.teacher.user.last_name}".strip()
+                first_name = (session.subject.teacher.first_name or '').strip()
+                last_name = (session.subject.teacher.last_name or '').strip()
+                teacher_name = f"{first_name} {last_name}".strip() or session.subject.teacher.user.email
             
             ws.append([
                 session.class_name,

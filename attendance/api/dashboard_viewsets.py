@@ -165,7 +165,7 @@ class DashboardViewSet(viewsets.ViewSet):
                 action = 'Late Arrival'
 
             # Get student name
-            student_name = f"{attendance.student.user.first_name or ''} {attendance.student.user.last_name or ''}".strip()
+            student_name = f"{attendance.student.first_name or ''} {attendance.student.last_name or ''}".strip()
             if not student_name:
                 student_name = attendance.student.user.email
 
