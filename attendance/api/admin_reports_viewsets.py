@@ -18,8 +18,8 @@ class AdminReportsViewSet(viewsets.ViewSet):
             return None
 
     def _get_teacher_name(self, teacher):
-        first_name = (teacher.user.first_name or '').strip()
-        last_name = (teacher.user.last_name or '').strip()
+        first_name = (teacher.first_name or '').strip()
+        last_name = (teacher.last_name or '').strip()
         full_name = f"{first_name} {last_name}".strip()
         return full_name if full_name else teacher.user.email
 

@@ -33,12 +33,25 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class EnrollmentReadSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source='student.user.get_full_name', read_only=True)
-    student_email = serializers.EmailField(source='student.user.email', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.SerializerMethodField()
     student_roll_number = serializers.CharField(source='student.roll_number', read_only=True)
     student_department = serializers.CharField(source='student.department', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     subject_code = serializers.CharField(source='subject.code', read_only=True)
+    
+    def get_student_name(self, obj):
+        student = obj.student
+        if student:
+            first_name = (student.first_name or '').strip()
+            last_name = (student.last_name or '').strip()
+            full_name = f"{first_name} {last_name}".strip()
+            return full_name if full_name else student.user.email
+        return 'N/A'
+    
+    def get_student_email(self, obj):
+        student = obj.student
+        return student.user.email if student else ''
     
     class Meta:
         model = Enrollment
@@ -55,8 +68,21 @@ class ClassSessionSerializer(serializers.ModelSerializer):
 class ClassSessionReadSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     subject_code = serializers.CharField(source='subject.code', read_only=True)
-    teacher_name = serializers.CharField(source='subject.teacher.user.get_full_name', read_only=True)
-    teacher_email = serializers.EmailField(source='subject.teacher.user.email', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    teacher_email = serializers.SerializerMethodField()
+    
+    def get_teacher_name(self, obj):
+        teacher = obj.subject.teacher
+        if teacher:
+            first_name = (teacher.first_name or '').strip()
+            last_name = (teacher.last_name or '').strip()
+            full_name = f"{first_name} {last_name}".strip()
+            return full_name if full_name else teacher.user.email
+        return 'N/A'
+    
+    def get_teacher_email(self, obj):
+        teacher = obj.subject.teacher
+        return teacher.user.email if teacher else ''
     
     class Meta:
         model = ClassSession

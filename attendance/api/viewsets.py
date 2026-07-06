@@ -1345,7 +1345,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             class_session__subject__teacher__user=request.user
         ).select_related(
             'class_session', 'class_session__subject',
-            'student', 'student__user'
+            'student', 'student__user', 'initiated_by_user'
         ).prefetch_related(
             'verification_log'
         ).order_by('-marked_at')
@@ -1438,7 +1438,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                     attendance.marked_at.time().strftime('%H:%M:%S'),
                     attendance.class_session.class_name,
                     attendance.class_session.subject.code,
-                    f"{attendance.student.user.first_name} {attendance.student.user.last_name}",
+                    f"{attendance.student.first_name or ''} {attendance.student.last_name or ''}".strip() or attendance.student.user.email,
                     attendance.student.roll_number,
                     attendance.status,
                     confidence,

@@ -200,8 +200,17 @@ class ClassSessionTemplateSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     subject_code = serializers.CharField(source='subject.code', read_only=True)
-    teacher_name = serializers.CharField(source='subject.teacher.user.first_name', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
     day_of_week_display = serializers.CharField(source='get_day_of_week_display', read_only=True)
+    
+    def get_teacher_name(self, obj):
+        teacher = obj.subject.teacher
+        if teacher:
+            first_name = (teacher.first_name or '').strip()
+            last_name = (teacher.last_name or '').strip()
+            full_name = f"{first_name} {last_name}".strip()
+            return full_name if full_name else teacher.user.email
+        return 'N/A'
     
     class Meta:
         model = ClassSessionTemplate
