@@ -59,16 +59,12 @@ class DashboardViewSet(viewsets.ViewSet):
         """
         try:
             # 1. Total Students Count
-            total_students = StudentProfile.objects.filter(
-                user__is_active=True
-            ).count()
+            total_students = StudentProfile.objects.all().count()
 
             # 2. Total Teachers Count
-            total_teachers = TeacherProfile.objects.filter(
-                user__is_active=True
-            ).count()
+            total_teachers = TeacherProfile.objects.all().count()
 
-            # 3. Total Classes Count
+            # 3. Total Classes Count (including ClassSessionTemplate for future sessions)
             total_classes = ClassSession.objects.all().count()
 
             # 4. Today's Attendance Rate
@@ -77,7 +73,7 @@ class DashboardViewSet(viewsets.ViewSet):
                 marked_at__date=today
             )
 
-            today_present = today_attendance.filter(status__in=ATTENDED_STATUSES).count()
+            today_present = today_attendance.filter(status='PRESENT').count()
             today_total = today_attendance.count()
             today_rate = (today_present / today_total * 100) if today_total > 0 else 0
             today_rate = round(today_rate, 1)
@@ -88,16 +84,25 @@ class DashboardViewSet(viewsets.ViewSet):
             # 6. Recent Activity (last 10 records)
             recent_activity = self._get_recent_activity(limit=10)
 
-            return Response({
+            response_data = {
                 'totalStudents': total_students,
                 'totalTeachers': total_teachers,
                 'totalClasses': total_classes,
                 'todayAttendanceRate': today_rate,
                 'weeklyAttendance': weekly_attendance,
                 'recentActivity': recent_activity,
-            }, status=status.HTTP_200_OK)
+            }
+
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Dashboard stats: students={total_students}, teachers={total_teachers}, classes={total_classes}, today_rate={today_rate}%")
+
+            return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error fetching dashboard stats: {str(e)}", exc_info=True)
             return Response(
                 {'detail': f'Error fetching dashboard stats: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -117,16 +122,16 @@ class DashboardViewSet(viewsets.ViewSet):
                 marked_at__date=date
             )
 
-            present_count = day_attendance.filter(status__in=ATTENDED_STATUSES).count()
+            present_count = day_attendance.filter(status='PRESENT').count()
             total_count = day_attendance.count()
 
             # Calculate rate
             rate = (present_count / total_count * 100) if total_count > 0 else 0
             rate = round(rate, 0)  # Round to nearest integer for chart
 
-            # Get day label
-            day_index = date.weekday()
-            day_label = day_labels[(day_index + 1) % 7]  # Adjust for Mon start
+            # Get day label - calculate correct day of week
+            day_index = date.weekday()  # 0=Monday, 6=Sunday
+            day_label = day_labels[day_index]
 
             weekly_data.append({
                 'day': day_label,
@@ -164,7 +169,7 @@ class DashboardViewSet(viewsets.ViewSet):
             else:  # LATE or other
                 action = 'Late Arrival'
 
-            # Get student name
+            # Get student name (from StudentProfile, not CustomUser)
             student_name = f"{attendance.student.first_name or ''} {attendance.student.last_name or ''}".strip()
             if not student_name:
                 student_name = attendance.student.user.email
