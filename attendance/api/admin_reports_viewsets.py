@@ -169,6 +169,7 @@ class AdminReportsViewSet(viewsets.ViewSet):
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill, Alignment
             from io import BytesIO
+            from django.http import HttpResponse
             
             start_date_str = request.query_params.get('start_date')
             end_date_str = request.query_params.get('end_date')
@@ -274,7 +275,7 @@ class AdminReportsViewSet(viewsets.ViewSet):
             wb.save(buffer)
             buffer.seek(0)
             
-            response = Response(
+            response = HttpResponse(
                 buffer.getvalue(),
                 content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )

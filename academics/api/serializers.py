@@ -18,9 +18,10 @@ class SubjectReadSerializer(serializers.ModelSerializer):
     def get_teacher_name(self, obj):
         if not obj.teacher:
             return None
-        user = obj.teacher.user
-        full_name = f"{user.first_name} {user.last_name}".strip()
-        return full_name if full_name else user.email
+        first_name = (obj.teacher.first_name or '').strip()
+        last_name = (obj.teacher.last_name or '').strip()
+        full_name = f"{first_name} {last_name}".strip()
+        return full_name if full_name else obj.teacher.user.email
     
     def get_teacher_email(self, obj):
         if not obj.teacher:
