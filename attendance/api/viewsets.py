@@ -1345,7 +1345,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             class_session__subject__teacher__user=request.user
         ).select_related(
             'class_session', 'class_session__subject',
-            'student', 'student__user',
+            'student', 'student__user'
+        ).prefetch_related(
             'verification_log'
         ).order_by('-marked_at')
         
@@ -1417,17 +1418,20 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             
             # Write data rows
             for row_idx, attendance in enumerate(queryset, 2):
+                log_qs = attendance.verification_log.all()
+                log = log_qs[0] if log_qs else None
+                
                 confidence = ''
-                if attendance.verification_log:
-                    confidence = round(attendance.verification_log.face_confidence * 100, 1)
+                if log:
+                    confidence = round(log.face_confidence * 100, 1)
                 
                 liveness = 'N/A'
-                if attendance.verification_log:
-                    liveness = attendance.verification_log.liveness_passed
+                if log:
+                    liveness = log.liveness_passed
                 
                 distance = ''
-                if attendance.verification_log and attendance.verification_log.distance_from_classroom:
-                    distance = round(attendance.verification_log.distance_from_classroom, 1)
+                if log and log.distance_from_classroom:
+                    distance = round(log.distance_from_classroom, 1)
                 
                 row_data = [
                     attendance.marked_at.date().isoformat(),
