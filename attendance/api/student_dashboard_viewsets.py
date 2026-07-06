@@ -530,8 +530,8 @@ class StudentDashboardViewSet(viewsets.ViewSet):
             return Response({
                 'id': str(request.user.id),
                 'email': request.user.email,
-                'first_name': request.user.first_name or '',
-                'last_name': request.user.last_name or '',
+                'first_name': student.first_name or '',
+                'last_name': student.last_name or '',
                 'phone_no': student.phone_no or '',
                 'address': student.address or '',
                 'roll_number': student.roll_number,
