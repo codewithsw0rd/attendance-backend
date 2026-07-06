@@ -204,7 +204,7 @@ class StudentViewSet(ModelViewSet):
 
                     # Reject low-quality photos before storing — a bad embedding
                     # at enrollment causes poor matching for the lifetime of the account.
-                    MIN_QUALITY = 0.35
+                    MIN_QUALITY = 0.30
                     if quality_score < MIN_QUALITY:
                         # IMPORTANT: @transaction.atomic only rolls back on exceptions,
                         # NOT on return statements. We must explicitly signal a rollback
