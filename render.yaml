@@ -19,3 +19,47 @@ services:
         value: re_Ruu3CqJ4_HdUxzmgvyihh7478hjzNdWYW
       - key: FRONTEND_URL
         value: http://localhost:3000
+
+  # Celery Beat Scheduler - Runs periodic tasks like auto-starting sessions
+  - type: background_worker
+    name: attendance-celery-beat
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A core beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ML_SERVICE_URL
+        value: https://heavily-regime-snowdrift.ngrok-free.dev
+      - key: SECRET_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        value: re_Ruu3CqJ4_HdUxzmgvyihh7478hjzNdWYW
+      - key: FRONTEND_URL
+        value: http://localhost:3000
+
+  # Celery Worker - Processes background tasks
+  - type: background_worker
+    name: attendance-celery-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A core worker -l info
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ML_SERVICE_URL
+        value: https://heavily-regime-snowdrift.ngrok-free.dev
+      - key: SECRET_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        value: re_Ruu3CqJ4_HdUxzmgvyihh7478hjzNdWYW
+      - key: FRONTEND_URL
+        value: http://localhost:3000
