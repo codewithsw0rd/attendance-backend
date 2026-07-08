@@ -877,7 +877,7 @@ class StudentNotificationConsumer(AsyncWebsocketConsumer):
                 'subject_code': event.get('subject_code'),
                 'subject_name': event.get('subject_name', ''),
                 'template_id': event.get('template_id'),
-                'message': f"The session started",
+                'message': f"Attendance for {event.get('subject_code')} is now open",
                 'timestamp': timezone.now().isoformat()
             }))
             logger.info(f"Sent session_started notification to student {self.user_id}")
