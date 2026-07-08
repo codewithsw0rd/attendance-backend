@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'django_filters',
     'drf_spectacular',
+    'django_celery_beat',
     
     'accounts',
     'academics',
@@ -251,6 +252,11 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+
+# Celery Beat (Periodic Task Scheduler)
+# Requires: pip install django-celery-beat
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_BEAT_SCHEDULE = {}  # Defined in core/celery.py
 
 
 # ────────────────────────────────────────────────────────────────────────────
