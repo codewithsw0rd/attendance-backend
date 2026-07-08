@@ -1113,6 +1113,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         
         # Close session
         session.ended_at = timezone.now()
+        session.is_active = False
         session.save()
         
         # Return summary

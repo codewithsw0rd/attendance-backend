@@ -157,6 +157,12 @@ class AttendanceSession(BaseModel):
         help_text="List of student user IDs detected during session"
     )
     
+    # Status tracking
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this session is currently active (not ended)"
+    )
+    
     class Meta:
         ordering = ['-started_at']
         indexes = [
@@ -171,12 +177,13 @@ class AttendanceSession(BaseModel):
             return f"Session {self.template.get_day_of_week_display()} {self.session_time} ({self.session_date})"
         return f"Session for {self.class_session.class_name} ({self.started_at})"
     
-    def is_active(self):
+    def get_is_active(self):
         """Check if session is currently active (started but not ended)"""
-        return self.ended_at is None
+        return self.is_active and self.ended_at is None
     
     def can_student_mark_attendance(self):
         """Check if session is active and allows student self-marking"""
+        return self.get_is_active()
         return self.is_active()
 
 class Attendance(BaseModel):
